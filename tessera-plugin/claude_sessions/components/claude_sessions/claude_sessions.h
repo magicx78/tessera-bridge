@@ -116,6 +116,8 @@ class ClaudeSessions : public Component, public tessera::Plugin {
 
  protected:
   void handle_event(const std::string &event);
+  // Sends the request of `pending_event_` (a question for the popup, a hint); on_interval repeats it while no reply came.
+  void send_event_request();
   void show_popup_now();
   tessera::BarItem bar() const;
   uint32_t ask(const char *service, JsonDocument &data);
@@ -134,6 +136,11 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   bool overview_due_ = false;
   // What the pending question or hint request is for: the popup, or the card.
   bool question_for_popup_ = false;
+  // The event whose request the app has not answered yet (a request sent while the screen still waited for the app,
+  // or a reply lost on the way, is repeated by on_interval), when it was sent last, and how often.
+  std::string pending_event_;
+  uint32_t pending_sent_ms_ = 0;
+  uint8_t pending_tries_ = 0;
 };
 
 }  // namespace esphome::claude_sessions

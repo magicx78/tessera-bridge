@@ -28,6 +28,9 @@ static constexpr int MAX_PAGE_ROWS = 8;
 static constexpr int MAX_LINES = 6;
 static constexpr int MAX_OPTIONS = 4;
 static constexpr uint32_t OVERVIEW_SPACING_MS = 1500;
+// A question or hint request without a reply is repeated after this long, this many times in all.
+static constexpr uint32_t EVENT_RETRY_MS = 10000;
+static constexpr uint8_t EVENT_RETRIES = 6;
 
 // ---- Small helpers ----
 
@@ -1043,10 +1046,26 @@ void ClaudeSessions::handle_event(const std::string &event) {
   if (handle.empty()) return;
   if (kind == "question") {
     if (!question_popup_ || !question_popup_->state) return;
-    question_for_popup_ = true;
-    request_question(handle.c_str());
   } else if (kind == "hint") {
     if (!hint_popup_ || !hint_popup_->state) return;
+  } else {
+    return;
+  }
+  pending_event_ = event;
+  pending_tries_ = 0;
+  send_event_request();
+}
+
+void ClaudeSessions::send_event_request() {
+  const size_t colon = pending_event_.find(':');
+  const std::string kind = pending_event_.substr(0, colon), handle = pending_event_.substr(colon + 1);
+  pending_sent_ms_ = millis();
+  pending_tries_ += 1;
+  ESP_LOGD(TAG, "Event %s: request %u", pending_event_.c_str(), (unsigned) pending_tries_);
+  if (kind == "question") {
+    question_for_popup_ = true;
+    request_question(handle.c_str());
+  } else {
     request_hint(handle.c_str());
   }
 }
@@ -1057,6 +1076,12 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
     // The first value after a start is handled too: a question asked while the screen was off or away is still
     // open, and the registry's reply decides (a popup only for an open question, for a hint still waiting).
     handle_event(roomy::plain(seen_event_));
+  }
+  // A request the app did not answer (sent while the screen still waited for the app after a start, or lost with
+  // the connection) is sent again, a few times, so a question open at that moment still gets its popup.
+  if (!pending_event_.empty() && now_ms - pending_sent_ms_ >= EVENT_RETRY_MS) {
+    if (pending_tries_ < EVENT_RETRIES) send_event_request();
+    else pending_event_.clear();
   }
   if (rev_ && rev_->has_state() && !roomy::same(rev_->state, seen_rev_)) {
     seen_rev_ = roomy::text(rev_->state);
@@ -1096,6 +1121,7 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
     tessera::refresh();
   } else if (re && re == asked_question_) {
     asked_question_ = 0;
+    pending_event_.clear();
     ESP_LOGD(TAG, "Question reply %u: ok %d, %s %s", (unsigned) re, (int) ok, result["h"] | "", result["status"] | "");
     if (ok && !result.isNull()) {
       parse_question(question_, result);
@@ -1116,6 +1142,7 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
     }
   } else if (re && re == asked_hint_) {
     asked_hint_ = 0;
+    pending_event_.clear();
     ESP_LOGD(TAG, "Hint reply %u: ok %d, %s %s", (unsigned) re, (int) ok, result["h"] | "", result["state"] | "");
     if (ok && !result.isNull() && !std::strcmp(result["state"] | "", "perm")) {
       popup_.question = false;

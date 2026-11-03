@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.4
+- A question or hint request the app did not answer is sent again every 10 s, up to six times: after a start the first event was handled while the screen still waited for the app, the request could not be sent, and nothing asked again, so the open question got no popup (seen on hardware after a reboot).
+
 ## 0.1.3
 - A question asked while the screen was off, rebooting or away from Home Assistant gets its popup once the screen is back: the first `event` value after a start was treated as history and skipped, so a question open at that moment never showed (seen on hardware after a Home Assistant restart). The registry's reply still decides: a popup only for a question that is open, a hint only while it waits.
 
