@@ -127,7 +127,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   PopupView popup_;
   char pending_question_[12] = "";
   tessera::Text seen_event_, seen_rev_;
-  bool first_event_ = true, first_rev_ = true;
+  bool first_rev_ = true;
   uint32_t asked_overview_ = 0, asked_question_ = 0, asked_hint_ = 0, asked_answer_ = 0;
   uint32_t last_overview_ms_ = 0;
   uint32_t last_question_ms_ = 0;

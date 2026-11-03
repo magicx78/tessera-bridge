@@ -1054,9 +1054,9 @@ void ClaudeSessions::handle_event(const std::string &event) {
 void ClaudeSessions::on_interval(uint32_t now_ms) {
   if (event_ && event_->has_state() && !roomy::same(event_->state, seen_event_)) {
     seen_event_ = roomy::text(event_->state);
-    // The first value after a start is history: only a change from here on is news.
-    if (!first_event_) handle_event(roomy::plain(seen_event_));
-    first_event_ = false;
+    // The first value after a start is handled too: a question asked while the screen was off or away is still
+    // open, and the registry's reply decides (a popup only for an open question, for a hint still waiting).
+    handle_event(roomy::plain(seen_event_));
   }
   if (rev_ && rev_->has_state() && !roomy::same(rev_->state, seen_rev_)) {
     seen_rev_ = roomy::text(rev_->state);
