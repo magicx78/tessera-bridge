@@ -1,12 +1,15 @@
 #include "claude_sessions.h"
 
 #include "esphome/core/hal.h"
+#include "esphome/core/log.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 namespace esphome::claude_sessions {
+
+static const char *const TAG = "claude_sessions";
 
 using tessera::Font;
 using tessera::Tone;
@@ -77,8 +80,11 @@ static std::string limits_line(const tessera::Plugin *plugin, const Overview &o,
   if (o.l5h_at && epoch && o.l5h_at > epoch) {
     const uint32_t left = o.l5h_at - epoch;
     char when[16];
-    if (left >= 3600) std::snprintf(when, sizeof(when), "%uh %02um", left / 3600, (left % 3600) / 60);
-    else std::snprintf(when, sizeof(when), "%um", left / 60);
+    // Cast: uint32_t is unsigned long on the ESP32-P4 toolchain, so "%u" would warn there.
+    if (left >= 3600)
+      std::snprintf(when, sizeof(when), "%uh %02um", (unsigned) (left / 3600), (unsigned) ((left % 3600) / 60));
+    else
+      std::snprintf(when, sizeof(when), "%um", (unsigned) (left / 60));
     line += " · ";
     line += tessera::fill(plugin->text("reset_in"), "n", when);
   }
@@ -135,6 +141,8 @@ void ClaudeSessions::take_tile_data(JsonObjectConst data) {
   o.lwk_at = a["lwk_at"] | 0u;
   o.valid = true;
   o.at = tessera::epoch();
+  ESP_LOGD(TAG, "Tile data: %d sessions, %d open, rev %d, limits 5h %d%% week %d%%", o.count, o.open,
+           (int) (a["rev"] | 0), o.l5h, o.lwk);
 }
 
 static void parse_overview(Overview &o, JsonObjectConst result) {
@@ -948,7 +956,10 @@ class AskPopup : public tessera::Popup {
 // ---- The plugin ----
 
 void ClaudeSessions::setup() {
-  add_tile("overview", [this]() { return new OverviewTile(this); });
+  add_tile("overview", [this]() {
+    ESP_LOGD(TAG, "Overview tile created");
+    return new OverviewTile(this);
+  });
   add_card("sessions", [this]() { return new SessionsCard(this); });
   add_card("question", [this]() { return new QuestionCard(this); });
   add_bar_item("asks", [this]() { return bar(); });
@@ -1009,6 +1020,7 @@ bool ClaudeSessions::send_answer() {
     for (const Option &o : part.options) if (o.chosen) chosen.add(o.id);
   }
   asked_answer_ = ask("answer", data);
+  ESP_LOGD(TAG, "Answer sent for %s rev %d (request %u)", question_.h, question_.rev, (unsigned) asked_answer_);
   return asked_answer_ != 0;
 }
 
@@ -1066,11 +1078,13 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
   JsonObjectConst result = message["result"];
   if (re && re == asked_overview_) {
     asked_overview_ = 0;
+    ESP_LOGD(TAG, "Overview reply %u: ok %d, %u sessions", (unsigned) re, (int) ok, (unsigned) (result["sessions"].size()));
     if (ok && !result.isNull()) parse_overview(overview_, result);
     if (sessions_card_) sessions_card_->paint();
     tessera::refresh();
   } else if (re && re == asked_question_) {
     asked_question_ = 0;
+    ESP_LOGD(TAG, "Question reply %u: ok %d, %s %s", (unsigned) re, (int) ok, result["h"] | "", result["status"] | "");
     if (ok && !result.isNull()) {
       parse_question(question_, result);
       if (question_for_popup_) {
@@ -1090,6 +1104,7 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
     }
   } else if (re && re == asked_hint_) {
     asked_hint_ = 0;
+    ESP_LOGD(TAG, "Hint reply %u: ok %d, %s %s", (unsigned) re, (int) ok, result["h"] | "", result["state"] | "");
     if (ok && !result.isNull() && !std::strcmp(result["state"] | "", "perm")) {
       popup_.question = false;
       copy(popup_.handle, result["h"] | "");
@@ -1100,6 +1115,8 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
     }
   } else if (re && re == asked_answer_) {
     asked_answer_ = 0;
+    ESP_LOGD(TAG, "Answer reply %u: ok %d, accepted %d, reason %s", (unsigned) re, (int) ok, (int) (result["accepted"] | false),
+             result["reason"] | "");
     if (question_card_) {
       if (!ok || result.isNull()) question_card_->answered(false, "failed");
       else question_card_->answered(result["accepted"] | false, result["reason"] | "");
