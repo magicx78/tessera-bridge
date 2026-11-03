@@ -1001,6 +1001,7 @@ void ClaudeSessions::request_question(const char *handle) {
   data["question"] = handle;
   asked_question_ = ask("get_question", data);
   if (!asked_question_ && question_card_) question_card_->failed();
+  last_question_ms_ = millis();
 }
 
 void ClaudeSessions::request_hint(const char *handle) {
@@ -1061,14 +1062,24 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
     if (!first_rev_ && (sessions_card_ || question_card_)) overview_due_ = true;
     first_rev_ = false;
   }
-  if (overview_due_ && now_ms - last_overview_ms_ >= OVERVIEW_SPACING_MS) {
-    if (sessions_card_) request_overview();
-    else overview_due_ = false;
+  if (overview_due_) {
+    // Each open card asks again, at most every OVERVIEW_SPACING_MS: the registry's rev moves with every report of
+    // every session (several a second while sessions poll), and a request per change flooded Home Assistant.
+    bool pending = false;
+    if (sessions_card_) {
+      if (now_ms - last_overview_ms_ >= OVERVIEW_SPACING_MS) request_overview();
+      else pending = true;
+    }
     // A question card learns of a change by asking again for its question.
     if (question_card_ && question_.h[0]) {
-      question_for_popup_ = false;
-      request_question(question_.h);
+      if (now_ms - last_question_ms_ >= OVERVIEW_SPACING_MS) {
+        question_for_popup_ = false;
+        request_question(question_.h);
+      } else {
+        pending = true;
+      }
     }
+    overview_due_ = pending;
   }
 }
 

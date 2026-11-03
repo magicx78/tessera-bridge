@@ -130,6 +130,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   bool first_event_ = true, first_rev_ = true;
   uint32_t asked_overview_ = 0, asked_question_ = 0, asked_hint_ = 0, asked_answer_ = 0;
   uint32_t last_overview_ms_ = 0;
+  uint32_t last_question_ms_ = 0;
   bool overview_due_ = false;
   // What the pending question or hint request is for: the popup, or the card.
   bool question_for_popup_ = false;
