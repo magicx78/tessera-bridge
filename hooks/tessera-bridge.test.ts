@@ -10,6 +10,7 @@ const OPTIONS = {
   screen: '',
   answerEntity: 'input_text.claude_screen_answer',
   permissionHints: 'on',
+  hintDelay: '5',
 }
 
 type Call = { method: string; url: string; body: unknown }
@@ -51,6 +52,14 @@ test('buildAlert wires both buttons to the answer entity', async () => {
 test('describeCall and formatRemaining read well', async () => {
   expect(describeCall('Bash', { command: 'git   status' })).toBe('Bash: git status')
   expect(describeCall('Read', { file_path: '/tmp/a' })).toBe('Read: /tmp/a')
+  expect(
+    describeCall('mcp__237d5e7f-01a6-419f-b176-a9833f3d3a3c__ha_call_service', {
+      domain: 'light',
+      service: 'turn_on',
+      entity_id: 'light.kitchen',
+    }),
+  ).toBe('ha_call_service: light.turn_on → light.kitchen')
+  expect(describeCall('mcp__ha-tools__ha_search', { query: 'lamp' })).toBe('ha_search (ha-tools): lamp')
   expect(formatRemaining('2026-01-01T01:09:00Z', Date.parse('2026-01-01T00:00:00Z'))).toBe('1h 09m')
   expect(formatRemaining(undefined, 0)).toBe('–')
 })

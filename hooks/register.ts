@@ -26,9 +26,6 @@ const KNOWN_LIMITS: Record<string, { id: string; name: string }> = {
   seven_day: { id: 'sensor.claude_limit_week', name: 'Claude Woche' },
 }
 
-/** How long a permission ask has to stay open before the screen shows a hint: in auto mode most asks settle by themselves within a second or two. */
-const HINT_DELAY_MS = 5000
-
 /** Module state: lost on a reload, which is fine for these. */
 const state = {
   /** The tool_use_id the hint on the screen is about, if one is up. */
@@ -86,7 +83,7 @@ async function settleAsk($: EngineInterface, cfg: HaConfig, toolUseId: string | 
   await dismiss($, cfg)
 }
 
-/** Shows the hint for an ask that is still open after HINT_DELAY_MS. */
+/** Shows the hint for an ask that is still open after the configured delay. */
 async function showHintIfStillOpen($: EngineInterface, cfg: HaConfig, toolUseId: string, tool: string, input: unknown) {
   if (!state.pendingAsks.has(toolUseId) || state.hintFor !== null) return
   state.hintFor = toolUseId
@@ -368,7 +365,7 @@ export const register: Register = (on, options) => {
       state.pendingAsks.add(id)
       const tool = e.tool
       const input = e.input
-      $.clock.after(HINT_DELAY_MS, () => quietly($, () => showHintIfStillOpen($, cfg, id, tool, input)))
+      $.clock.after(cfg.hintDelayMs, () => quietly($, () => showHintIfStillOpen($, cfg, id, tool, input)))
     }
     return verdict
   }).catch(($, e, next) => next(e))

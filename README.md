@@ -14,26 +14,8 @@ What it does:
 
 1. In Home Assistant, create an `input_text` helper named `claude_screen_answer` (the screen's buttons write the answer there).
 2. In your Home Assistant profile, under Security, create a long-lived access token.
-3. In the app's config menu set the mod's options: the Home Assistant URL as this PC reaches it, the token, and optionally one screen's device name (empty reaches every paired screen). For sound, set the sound player to a `media_player` entity and install the Chime TTS integration (HACS) with a TTS engine.
+3. In the app's config menu set the mod's options: the Home Assistant URL as this PC reaches it, the token, and optionally one screen's device name (empty reaches every paired screen). For sound, set the sound player to a `media_player` entity, install the Chime TTS integration (HACS), and name the speech engine (a `tts.*` entity such as `tts.home_assistant_cloud` or `tts.piper`) and the language.
 4. Add the usage sensors to a page of a screen as tiles (`display: meter`), for example through the `esp_screens_add_tile` event.
 5. Optional backup for the answer channel, in case a screen's firmware does not run the alert's button action: an automation on the event `esphome.screen_alert` that writes `{{ trigger.event.data.action }}|{{ trigger.event.data.title }}` to the helper when `action` is `ok` or `button2`. The mod understands both formats.
 
-Without a token the mod does nothing. Permission hints appear only when an ask stays open for more than five seconds, because the app's auto mode reports every call as an ask first.
-
-## Install
-
-At the prompt of a terminal session:
-
-```
-/plugin install tessera-bridge --marketplace magicx78/tessera-bridge
-```
-
-From a shell:
-
-```
-claude plugin install tessera-bridge --marketplace magicx78/tessera-bridge
-```
-
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `magicx78/tessera-bridge`, then Add plugin.
-
-Answer `y` to add the marketplace, then pick a scope (user is the usual one), then fill in the options (URL, token, screen, sound).
+Without a token the mod does nothing. Permission hints appear only when an ask stays open for longer than the hint delay (8 seconds by default), because the app's auto mode reports every call as an ask first; raise the delay there if hints still show up for calls the app approves by itself.

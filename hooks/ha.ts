@@ -7,10 +7,14 @@ export type HaConfig = {
   screen: string
   answerEntity: string
   permissionHints: boolean
+  /** How long an ask stays open before the screen shows a hint, in milliseconds. */
+  hintDelayMs: number
   /** A media_player that plays a chime and the spoken text with each alert; empty for none. */
   soundPlayer: string
   soundChime: string
   soundSpeak: boolean
+  soundTts: string
+  soundLanguage: string
 }
 
 export function readConfig(options: PluginOptions): HaConfig {
@@ -24,9 +28,12 @@ export function readConfig(options: PluginOptions): HaConfig {
     screen: str('screen', ''),
     answerEntity: str('answerEntity', 'input_text.claude_screen_answer'),
     permissionHints: str('permissionHints', 'on') !== 'off',
+    hintDelayMs: Math.max(0, Math.min(120, Number(str('hintDelay', '8')) || 8)) * 1000,
     soundPlayer: str('soundPlayer', ''),
     soundChime: str('soundChime', 'chirp'),
     soundSpeak: str('soundSpeak', 'on') !== 'off',
+    soundTts: str('soundTts', ''),
+    soundLanguage: str('soundLanguage', 'de-DE'),
   }
 }
 
@@ -36,9 +43,13 @@ export function readConfig(options: PluginOptions): HaConfig {
  */
 export async function playSound($: EngineInterface, cfg: HaConfig, text: string): Promise<void> {
   if (!cfg.soundPlayer) return
-  const data: Json = { entity_id: cfg.soundPlayer, language: 'de', announce: true }
+  const data: Json = { entity_id: cfg.soundPlayer, announce: true }
   if (cfg.soundChime) data.chime_path = cfg.soundChime
-  if (cfg.soundSpeak && text) data.message = text
+  if (cfg.soundSpeak && text) {
+    data.message = text
+    if (cfg.soundLanguage) data.language = cfg.soundLanguage
+    if (cfg.soundTts) data.tts_platform = cfg.soundTts
+  }
   if (data.chime_path === undefined && data.message === undefined) return
   await callService($, cfg, 'chime_tts', 'say', data)
 }

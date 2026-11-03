@@ -42,12 +42,30 @@
       "description": "The Chime TTS preset played before the question (chirp, bells, ding_dong, knock, soft, ...). Empty: no chime, only the spoken text.",
       "default": "chirp"
     },
+    "soundTts": {
+      "type": "string",
+      "title": "Speech engine",
+      "description": "The tts entity Chime TTS speaks with (e.g. tts.home_assistant_cloud or tts.piper). Empty: Chime TTS's own default, which must exist in Home Assistant.",
+      "default": ""
+    },
+    "soundLanguage": {
+      "type": "string",
+      "title": "Speech language",
+      "description": "Language code for the spoken text, e.g. de-DE or en-US.",
+      "default": "de-DE"
+    },
     "soundSpeak": {
       "type": "string",
       "title": "Read the question aloud",
       "description": "on: the question (or the permission hint) is spoken after the chime. off: chime only.",
       "default": "on",
       "options": ["on", "off"]
+    },
+    "hintDelay": {
+      "type": "string",
+      "title": "Permission hint delay",
+      "description": "Seconds a permission ask has to stay open before the screen shows a hint. In the app's auto mode every call is reported as an ask first and most settle by themselves, so a longer delay (10 to 15) avoids false hints there.",
+      "default": "8"
     },
     "permissionHints": {
       "type": "string",
