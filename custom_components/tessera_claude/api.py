@@ -5,6 +5,7 @@ Signed in with a long-lived access token, as any call to Home Assistant's /api/.
 """
 from __future__ import annotations
 
+import logging
 import time
 
 from aiohttp import web
@@ -12,6 +13,8 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import API_PATH, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 ACTIONS = ("report", "claim", "end")
 
@@ -39,6 +42,16 @@ class TesseraClaudeView(HomeAssistantView):
         registry = entry.runtime_data.registry
         now = time.monotonic()
         if action == "report":
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                limits = body.get("limits") if isinstance(body.get("limits"), list) else []
+                _LOGGER.debug(
+                    "report %s/%s state=%s limits_age=%s kinds=%s",
+                    body.get("instance"),
+                    str(body.get("session"))[:8],
+                    body.get("state"),
+                    body.get("limits_age"),
+                    [(l.get("kind"), l.get("percent")) for l in limits if isinstance(l, dict)],
+                )
             reply = registry.report(body, now)
         elif action == "claim":
             reply = registry.claim(body)
