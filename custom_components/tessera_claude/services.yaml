@@ -1,0 +1,38 @@
+get_overview:
+get_question:
+  fields:
+    question:
+      required: true
+      example: q7
+      selector:
+        text:
+get_hint:
+  fields:
+    session:
+      required: true
+      example: s3
+      selector:
+        text:
+answer:
+  fields:
+    question:
+      required: true
+      example: q7
+      selector:
+        text:
+    rev:
+      required: false
+      example: 12
+      selector:
+        number:
+          mode: box
+    answers:
+      required: true
+      example: '{"p0": ["o1"]}'
+      selector:
+        object:
+    display:
+      required: false
+      example: kitchen
+      selector:
+        text:

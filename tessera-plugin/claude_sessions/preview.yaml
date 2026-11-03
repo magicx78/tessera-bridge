@@ -1,0 +1,98 @@
+# What tools/preview.py shows: the sessions sensor as the tessera_claude integration writes it, and the answers of
+# the integration's services, so the tile, the cards and the popup show real data (docs/PREVIEW.md).
+tiles:
+  - tile: overview
+    name: Claude
+    entity: sensor.claude_sessions
+  - tile: overview
+    name: Nothing running
+    entity: sensor.claude_sessions_empty
+    sizes: [1x1, 2x1]
+  - tile: overview
+    name: No sensor
+    sizes: [1x1]
+
+states:
+  sensor.claude_sessions:
+    state: "3"
+    attributes:
+      rev: 41
+      event: "question:qab7"
+      open: 2
+      h: [sab3, sab5, sab1]
+      names: [tessera-bridge, homelab-docs, garden-irrigation]
+      states: [ask, perm, work]
+      ctx: [37, 62, -1]
+      asks: [2, 0, 0]
+      l5h: 44
+      l5h_at: "{epoch+1h}"
+      lwk: 12
+      lwk_at: "{epoch+3d}"
+      lx_names: [opus]
+      lx: [8]
+  sensor.claude_sessions_empty:
+    state: "0"
+    attributes:
+      rev: 1
+      event: ""
+      open: 0
+      h: []
+      names: []
+      states: []
+      ctx: []
+      asks: []
+      l5h: -1
+      l5h_at: 0
+      lwk: -1
+      lwk_at: 0
+      lx_names: []
+      lx: []
+
+commands:
+  "call_service:tessera_claude.get_overview":
+    sessions:
+      - { h: sab3, name: tessera-bridge, pc: workstation, state: ask, ctx: 37, asks: 2, q: qab7, detail: "" }
+      - { h: sab5, name: homelab-docs, pc: workstation, state: perm, ctx: 62, asks: 0, q: "", detail: "Bash: rm -rf build" }
+      - { h: sab1, name: garden-irrigation, pc: laptop, state: work, ctx: -1, asks: 0, q: "", detail: "" }
+      - { h: sab8, name: openclaw, pc: laptop, state: idle, ctx: 5, asks: 0, q: "", detail: "" }
+      - { h: sab9, name: solar-expansion, pc: laptop, state: lost, ctx: 80, asks: 0, q: "", detail: "" }
+    limits:
+      kinds:
+        five_hour: { percent: 44, resets_at: "{now+1h}" }
+        seven_day: { percent: 12, resets_at: "{now+3d}" }
+  "call_service:tessera_claude.get_question":
+    h: qab7
+    rev: 41
+    status: open
+    session: sab3
+    name: tessera-bridge
+    parts:
+      - id: p0
+        header: Approach
+        text: "Should the display plugin answer questions with several parts one part at a time?"
+        lines: ["Should the display plugin answer questions", "with several parts one part at a time?"]
+        multi: false
+        options:
+          - { id: o0, label: "One at a time", description: "Simplest on a small screen" }
+          - { id: o1, label: "All on one page", description: "Needs a tall screen" }
+          - { id: o2, label: "Ask on the PC", description: "" }
+      - id: p1
+        header: Modules
+        text: "Which modules should the first version include?"
+        lines: ["Which modules should the first version include?"]
+        multi: true
+        options:
+          - { id: o0, label: "Tile", description: "" }
+          - { id: o1, label: "Cards", description: "" }
+          - { id: o2, label: "Popup", description: "" }
+  "call_service:tessera_claude.get_hint":
+    h: sab5
+    name: homelab-docs
+    state: perm
+    detail: "Bash: rm -rf build"
+  "call_service:tessera_claude.answer":
+    accepted: true
+
+cards:
+  - { card: sessions, entity: sensor.claude_sessions }
+  - { card: question }

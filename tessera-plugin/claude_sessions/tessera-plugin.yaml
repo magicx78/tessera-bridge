@@ -1,0 +1,56 @@
+# Claude sessions: every running Claude Code session (Desktop app or terminal) on the screen, with its state, its
+# context fill, the account's limits, and the questions Claude asks, answered on the screen. The data comes from the
+# tessera_claude integration in Home Assistant (custom_components/tessera_claude in this repository), fed by the
+# tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
+# translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
+id: claude_sessions
+version: 0.1.0
+# 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
+api: "0.18"
+icon: robot
+maintainer: magicx78
+license: MIT
+stage: beta
+topics: [tech]
+requires:
+  esphome: 2026.6.2
+boards: any
+flash_kb: 24
+
+permissions:
+  # The screen itself follows three attributes of the sessions sensor (a new question, the count, a change), so a
+  # popup can show while no tile of the plugin is on the glass.
+  read_entities: ["{sessions}"]
+  # What the cards and the popup ask the integration through the app, and how the screen answers a question.
+  ha_commands:
+    - "call_service:tessera_claude.get_overview"
+    - "call_service:tessera_claude.get_question"
+    - "call_service:tessera_claude.get_hint"
+    - "call_service:tessera_claude.answer"
+
+inputs:
+  - { id: sessions, kind: entity, domains: [sensor], scope: screen, label: input_sessions, hint: input_sessions_hint }
+
+tiles:
+  - id: overview
+    name: tile_name
+    icon: robot
+    sizes: { min: 1x1, max: 3x3 }
+    memory: 1600
+    domains: [sensor]
+    # The sessions sensor of the tessera_claude integration, by the lists it carries.
+    has_attributes: [h, states]
+    attributes: [rev, event, open, h, names, states, ctx, asks, l5h, l5h_at, lwk, lwk_at, lx_names, lx]
+    example: tile_example
+    preview: { title: "{name}", value: "{state}" }
+
+cards:
+  - { id: sessions, name: card_sessions }
+  - { id: question, name: card_question }
+
+bar_items:
+  - { id: asks, label: bar_asks, icon: robot, example: bar_example }
+
+settings:
+  - { key: claude_question_popup, label: setting_question_popup, hint: setting_question_popup_hint }
+  - { key: claude_hint_popup, label: setting_hint_popup, hint: setting_hint_popup_hint }

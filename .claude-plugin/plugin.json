@@ -1,8 +1,10 @@
 {
   "name": "tessera-bridge",
-  "version": "0.1.0",
-  "description": "Mirrors Claude's questions to Tessera touch screens in Home Assistant and pushes the account's usage limits as HA sensors",
-  "author": { "name": "magicx78" },
+  "version": "0.2.0",
+  "description": "Reports every Claude session (state, context, the account's limits, open questions) to the tessera_claude integration in Home Assistant, so Tessera screens show them all and answer questions",
+  "author": {
+    "name": "magicx78"
+  },
   "license": "MIT",
   "userConfig": {
     "haUrl": {
@@ -18,61 +20,33 @@
       "default": "",
       "sensitive": true
     },
-    "screen": {
+    "instanceName": {
       "type": "string",
-      "title": "Screen",
-      "description": "Device name of one Tessera screen (e.g. waveshare-p4-2), or empty for every paired screen",
+      "title": "Computer name",
+      "description": "How this computer is named in the session list on the screens; empty for none.",
       "default": ""
     },
-    "answerEntity": {
+    "sessionName": {
       "type": "string",
-      "title": "Answer entity",
-      "description": "The input_text helper the screen's buttons write the answer to",
-      "default": "input_text.claude_screen_answer"
-    },
-    "soundPlayer": {
-      "type": "string",
-      "title": "Sound player",
-      "description": "A media_player entity (e.g. the screen's own speaker) that plays a chime and reads the question when an alert appears, through the Chime TTS integration. Empty: no sound.",
+      "title": "Session name",
+      "description": "A name for the sessions of this installation; empty takes the project folder's name.",
       "default": ""
     },
-    "soundChime": {
+    "permissionHints": {
       "type": "string",
-      "title": "Chime",
-      "description": "The Chime TTS preset played before the question (chirp, bells, ding_dong, knock, soft, ...). Empty: no chime, only the spoken text.",
-      "default": "chirp"
-    },
-    "soundTts": {
-      "type": "string",
-      "title": "Speech engine",
-      "description": "The tts entity Chime TTS speaks with (e.g. tts.home_assistant_cloud or tts.piper). Empty: Chime TTS's own default, which must exist in Home Assistant.",
-      "default": ""
-    },
-    "soundLanguage": {
-      "type": "string",
-      "title": "Speech language",
-      "description": "Language code for the spoken text, e.g. de-DE or en-US.",
-      "default": "de-DE"
-    },
-    "soundSpeak": {
-      "type": "string",
-      "title": "Read the question aloud",
-      "description": "on: the question (or the permission hint) is spoken after the chime. off: chime only.",
+      "title": "Permission hints",
+      "description": "on: a permission prompt in the app is shown on the screens as a hint (answered on the PC). off: no hint.",
       "default": "on",
-      "options": ["on", "off"]
+      "options": [
+        "on",
+        "off"
+      ]
     },
     "hintDelay": {
       "type": "string",
       "title": "Permission hint delay",
       "description": "Seconds a permission ask has to stay open before the screen shows a hint. In the app's auto mode every call is reported as an ask first and most settle by themselves, so a longer delay (10 to 15) avoids false hints there.",
       "default": "8"
-    },
-    "permissionHints": {
-      "type": "string",
-      "title": "Permission hints",
-      "description": "on: a permission prompt in the app also shows a hint alert on the screen (answered on the PC). off: no hint.",
-      "default": "on",
-      "options": ["on", "off"]
     }
   }
 }

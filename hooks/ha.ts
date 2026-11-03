@@ -1,20 +1,20 @@
-import type { EngineInterface, PluginOptions } from 'claude-code'
+import type { PluginOptions } from 'claude-code'
 
-/** What the bridge needs to know about Home Assistant, read from the options. */
+import type { Host } from './host'
+
+/** What the bridge needs to know, read from the mod's options (plugin.json, userConfig). */
 export type HaConfig = {
+  /** Home Assistant's base URL without a trailing slash. */
   url: string
+  /** A long-lived access token; empty turns the bridge off. */
   token: string
-  screen: string
-  answerEntity: string
+  /** A name for this computer in the session list, "" for the host name the integration sees. */
+  instanceName: string
+  /** A name for this session in the session list, "" for the project folder's name. */
+  sessionName: string
   permissionHints: boolean
-  /** How long an ask stays open before the screen shows a hint, in milliseconds. */
+  /** How long a permission ask stays open before it is reported as "waiting for approval", in milliseconds. */
   hintDelayMs: number
-  /** A media_player that plays a chime and the spoken text with each alert; empty for none. */
-  soundPlayer: string
-  soundChime: string
-  soundSpeak: boolean
-  soundTts: string
-  soundLanguage: string
 }
 
 export function readConfig(options: PluginOptions): HaConfig {
@@ -25,107 +25,61 @@ export function readConfig(options: PluginOptions): HaConfig {
   return {
     url: str('haUrl', 'http://homeassistant.local:8123').replace(/\/+$/, ''),
     token: str('haToken', ''),
-    screen: str('screen', ''),
-    answerEntity: str('answerEntity', 'input_text.claude_screen_answer'),
+    instanceName: str('instanceName', ''),
+    sessionName: str('sessionName', ''),
     permissionHints: str('permissionHints', 'on') !== 'off',
     hintDelayMs: Math.max(0, Math.min(120, Number(str('hintDelay', '8')) || 8)) * 1000,
-    soundPlayer: str('soundPlayer', ''),
-    soundChime: str('soundChime', 'chirp'),
-    soundSpeak: str('soundSpeak', 'on') !== 'off',
-    soundTts: str('soundTts', ''),
-    soundLanguage: str('soundLanguage', 'de-DE'),
+  }
+}
+
+export type Json = Record<string, unknown>
+
+/** The integration's HTTP API (custom_components/tessera_claude/api.py), under Home Assistant's own /api/. */
+export const API_BASE = '/api/tessera_claude/v1'
+
+export class HaError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message)
   }
 }
 
 /**
- * Plays the chime and speaks `text` on the configured player through
- * `chime_tts.say`; nothing when no player is set. Errors stay with the caller.
+ * One JSON request to the integration's API. Resolves the parsed body; rejects with an HaError on a non-2xx status
+ * (404 when the integration is not installed) and with the fetch's own error when Home Assistant is unreachable.
  */
-export async function playSound($: EngineInterface, cfg: HaConfig, text: string): Promise<void> {
-  if (!cfg.soundPlayer) return
-  const data: Json = { entity_id: cfg.soundPlayer, announce: true }
-  if (cfg.soundChime) data.chime_path = cfg.soundChime
-  if (cfg.soundSpeak && text) {
-    data.message = text
-    if (cfg.soundLanguage) data.language = cfg.soundLanguage
-    if (cfg.soundTts) data.tts_platform = cfg.soundTts
-  }
-  if (data.chime_path === undefined && data.message === undefined) return
-  await callService($, cfg, 'chime_tts', 'say', data)
-}
-
-type Json = Record<string, unknown>
-
-async function request(
-  $: EngineInterface,
-  cfg: HaConfig,
-  method: 'GET' | 'POST',
-  path: string,
-  body?: Json,
-): Promise<string> {
-  const res = await $.http.fetch(cfg.url + path, {
-    method,
+export async function apiCall(host: Host, cfg: HaConfig, path: string, body: Json): Promise<Json> {
+  const res = await host.fetch(cfg.url + API_BASE + path, {
+    method: 'POST',
     headers: {
       Authorization: `Bearer ${cfg.token}`,
       'Content-Type': 'application/json',
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: JSON.stringify(body),
   })
-  if (!res.ok) {
-    throw new Error(`HA ${method} ${path} answered ${res.status}`)
-  }
-  return res.text
-}
-
-/** Fires an event on the HA event bus (what Tessera listens to). */
-export function fireEvent($: EngineInterface, cfg: HaConfig, type: string, data: Json): Promise<string> {
-  return request($, cfg, 'POST', `/api/events/${type}`, data)
-}
-
-/** Sets an entity's state and attributes through the REST API (creates it when missing). */
-export function setState(
-  $: EngineInterface,
-  cfg: HaConfig,
-  entity: string,
-  state: string | number,
-  attributes: Json,
-): Promise<string> {
-  return request($, cfg, 'POST', `/api/states/${entity}`, { state: String(state), attributes })
-}
-
-/** Reads an entity's current state. */
-export async function getState($: EngineInterface, cfg: HaConfig, entity: string): Promise<{ state: string }> {
-  const text = await request($, cfg, 'GET', `/api/states/${entity}`)
-  const parsed = JSON.parse(text) as { state?: unknown }
-  return { state: typeof parsed.state === 'string' ? parsed.state : '' }
-}
-
-/** Calls a HA action (service). */
-export function callService(
-  $: EngineInterface,
-  cfg: HaConfig,
-  domain: string,
-  service: string,
-  data: Json,
-): Promise<string> {
-  return request($, cfg, 'POST', `/api/services/${domain}/${service}`, data)
+  if (!res.ok) throw new HaError(`HA POST ${API_BASE}${path} answered ${res.status}`, res.status)
+  if (!res.text) return {}
+  const parsed: unknown = JSON.parse(res.text)
+  return parsed !== null && typeof parsed === 'object' ? (parsed as Json) : {}
 }
 
 let hasWarned = false
 
 /**
- * Runs `fn`; on failure shows one toast per module load and resolves undefined,
- * so a Home Assistant that is down never breaks a tool call or a turn.
+ * Runs `fn`; on failure logs it, shows one toast per module load, and resolves undefined, so a Home Assistant that is
+ * down never breaks a tool call or a turn.
  */
-export async function quietly<T>($: EngineInterface, fn: () => Promise<T>): Promise<T | undefined> {
+export async function quietly<T>(host: Host, fn: () => Promise<T>): Promise<T | undefined> {
   try {
     return await fn()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    $.ui.log(`tessera-bridge: ${message}`, { to: 'debug' })
+    host.log(`tessera-bridge: ${message}`)
     if (!hasWarned) {
       hasWarned = true
-      $.ui.toast(`Tessera-Bridge: Home Assistant nicht erreichbar (${message})`)
+      host.toast(`Tessera-Bridge: Home Assistant nicht erreichbar (${message})`)
     }
     return undefined
   }

@@ -1,5 +1,13 @@
 {
   "name": "tessera-bridge",
-  "owner": { "name": "magicx78" },
-  "plugins": [{ "name": "tessera-bridge", "source": "./" }]
+  "owner": {
+    "name": "magicx78"
+  },
+  "plugins": [
+    {
+      "name": "tessera-bridge",
+      "source": "./"
+    }
+  ],
+  "description": "Claude sessions on Tessera touch screens in Home Assistant"
 }

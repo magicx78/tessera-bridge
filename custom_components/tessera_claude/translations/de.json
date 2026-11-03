@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tessera Claude",
+        "description": "Claude-Sessions, ihre Fragen und die Konto-Limits für Tessera-Screens. Alles hier ist optional: ein Player für Gong und vorgelesene Frage über Chime TTS, und ob eine Freigabe-Anfrage am PC angesagt wird.",
+        "data": {
+          "player": "Sound-Player (media_player)",
+          "chime": "Gong (Chime-TTS-Preset, leer für keinen)",
+          "tts": "Sprachausgabe (tts-Entität, leer für den Chime-TTS-Standard)",
+          "language": "Sprache",
+          "speak": "Frage vorlesen",
+          "hints": "Freigabe-Anfragen ansagen"
+        }
+      }
+    },
+    "abort": { "single_instance_allowed": "Bereits eingerichtet." }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tessera Claude",
+        "data": {
+          "player": "Sound-Player (media_player)",
+          "chime": "Gong (Chime-TTS-Preset, leer für keinen)",
+          "tts": "Sprachausgabe (tts-Entität, leer für den Chime-TTS-Standard)",
+          "language": "Sprache",
+          "speak": "Frage vorlesen",
+          "hints": "Freigabe-Anfragen ansagen"
+        }
+      }
+    }
+  },
+  "services": {
+    "get_overview": { "name": "Übersicht holen", "description": "Jede Claude-Session mit Zustand, Kontext und offenen Fragen sowie die Konto-Limits." },
+    "get_question": { "name": "Frage holen", "description": "Eine offene Frage nach ihrem Handle: Teile und Optionen mit IDs.", "fields": { "question": { "name": "Frage", "description": "Das Handle der Frage (q7)." } } },
+    "get_hint": { "name": "Hinweis holen", "description": "Worauf eine Session am PC wartet.", "fields": { "session": { "name": "Session", "description": "Das Handle der Session (s3)." } } },
+    "answer": { "name": "Antworten", "description": "Beantwortet eine offene Frage. Genau eine Antwort wird wirksam; die Antwort sagt, ob es diese war.", "fields": { "question": { "name": "Frage", "description": "Das Handle der Frage." }, "rev": { "name": "Revision", "description": "Das rev aus get_question, damit keine veraltete Frage beantwortet wird." }, "answers": { "name": "Antworten", "description": "Options-IDs je Teil-ID: {\"p0\": [\"o1\"]}." }, "display": { "name": "Display", "description": "Wer antwortet, fürs Log." } } }
+  }
+}

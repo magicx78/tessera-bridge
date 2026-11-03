@@ -1,0 +1,49 @@
+# What a screen gets when it takes this plugin. Tessera includes this file from the screen's <name>.plugins.yaml with
+# SESSIONS filled in (the input chosen when the plugin was added) and adds the components folder beside it.
+defaults:
+  SESSIONS: sensor.claude_sessions
+
+# Three attributes of the sessions sensor, straight from Home Assistant: the newest event (a new question, a new
+# permission hint), how many questions are open, and a counter that moves with every change. The plugin's cards and
+# its popup follow them while no tile is on the glass.
+text_sensor:
+  - platform: homeassistant
+    id: claude_sessions_event
+    entity_id: ${SESSIONS}
+    attribute: event
+    internal: true
+  - platform: homeassistant
+    id: claude_sessions_open
+    entity_id: ${SESSIONS}
+    attribute: open
+    internal: true
+  - platform: homeassistant
+    id: claude_sessions_rev
+    entity_id: ${SESSIONS}
+    attribute: rev
+    internal: true
+
+# Two settings, kept on the screen and shown in Home Assistant and on the screen's settings page: whether a new
+# question opens a popup, and whether a permission prompt on the PC does.
+switch:
+  - platform: template
+    id: claude_question_popup
+    name: "Claude question popup"
+    icon: mdi:robot
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: claude_hint_popup
+    name: "Claude hint popup"
+    icon: mdi:lock-alert
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+
+claude_sessions:
+  event: claude_sessions_event
+  open: claude_sessions_open
+  rev: claude_sessions_rev
+  question_popup: claude_question_popup
+  hint_popup: claude_hint_popup
