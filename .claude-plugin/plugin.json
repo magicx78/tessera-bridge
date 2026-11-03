@@ -1,0 +1,60 @@
+{
+  "name": "tessera-bridge",
+  "version": "0.1.0",
+  "description": "Mirrors Claude's questions to Tessera touch screens in Home Assistant and pushes the account's usage limits as HA sensors",
+  "author": { "name": "magicx78" },
+  "license": "MIT",
+  "userConfig": {
+    "haUrl": {
+      "type": "string",
+      "title": "Home Assistant URL",
+      "description": "Base URL of Home Assistant as this PC reaches it, without a trailing slash",
+      "default": "http://homeassistant.local:8123"
+    },
+    "haToken": {
+      "type": "string",
+      "title": "Home Assistant token",
+      "description": "A long-lived access token (HA profile → Security → Long-lived access tokens). Empty turns the bridge off.",
+      "default": "",
+      "sensitive": true
+    },
+    "screen": {
+      "type": "string",
+      "title": "Screen",
+      "description": "Device name of one Tessera screen (e.g. waveshare-p4-2), or empty for every paired screen",
+      "default": ""
+    },
+    "answerEntity": {
+      "type": "string",
+      "title": "Answer entity",
+      "description": "The input_text helper the screen's buttons write the answer to",
+      "default": "input_text.claude_screen_answer"
+    },
+    "soundPlayer": {
+      "type": "string",
+      "title": "Sound player",
+      "description": "A media_player entity (e.g. the screen's own speaker) that plays a chime and reads the question when an alert appears, through the Chime TTS integration. Empty: no sound.",
+      "default": ""
+    },
+    "soundChime": {
+      "type": "string",
+      "title": "Chime",
+      "description": "The Chime TTS preset played before the question (chirp, bells, ding_dong, knock, soft, ...). Empty: no chime, only the spoken text.",
+      "default": "chirp"
+    },
+    "soundSpeak": {
+      "type": "string",
+      "title": "Read the question aloud",
+      "description": "on: the question (or the permission hint) is spoken after the chime. off: chime only.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "permissionHints": {
+      "type": "string",
+      "title": "Permission hints",
+      "description": "on: a permission prompt in the app also shows a hint alert on the screen (answered on the PC). off: no hint.",
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}

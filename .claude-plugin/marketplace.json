@@ -1,0 +1,5 @@
+{
+  "name": "tessera-bridge",
+  "owner": { "name": "magicx78" },
+  "plugins": [{ "name": "tessera-bridge", "source": "./" }]
+}
