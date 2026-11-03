@@ -54,6 +54,8 @@ export class SessionBridge {
   working = false
   context: ContextUsage | null = null
   limits: SessionRateLimit[] = []
+  /** When `limits` was measured, in the host clock's milliseconds; 0 for never. */
+  limitsAt = 0
   /** The questions of this session the display may answer, by tool_use_id. */
   readonly questions = new Map<string, ReportedQuestion>()
   /** Tool calls whose permission ask is still open, by tool_use_id. */
@@ -88,7 +90,7 @@ export class SessionBridge {
   }
 
   /** The report the integration gets: the whole state of the session, so a lost report costs nothing. */
-  body(): Json {
+  body(now = 0): Json {
     this.seq += 1
     return {
       instance: this.instance,
@@ -104,6 +106,9 @@ export class SessionBridge {
         ? { percent: this.context.percent ?? null, tokens: this.context.tokens ?? null, window: this.context.window }
         : null,
       limits: this.limits.map(l => ({ kind: l.kind, percent: l.percentUsed, resets_at: l.resetsAt ?? null })),
+      // Seconds since this session measured its limits: an idle session repeats an old reading on every
+      // heartbeat, and the integration keeps the freshest reading of the account, not the last one that arrived.
+      limits_age: this.limitsAt && now >= this.limitsAt ? Math.round((now - this.limitsAt) / 1000) : null,
       questions: Array.from(this.questions.values()),
     }
   }
@@ -111,9 +116,10 @@ export class SessionBridge {
   /** Sends the report; hands every open question's status to whoever waits for it. Undefined when HA is down. */
   async report(host: Host): Promise<ReportReply | undefined> {
     if (this.ended) return undefined
-    const reply = await quietly(host, () => apiCall(host, this.cfg, '/report', this.body()))
+    const now = await host.now()
+    const reply = await quietly(host, () => apiCall(host, this.cfg, '/report', this.body(now)))
     if (reply === undefined) return undefined
-    this.lastReportAt = await host.now()
+    this.lastReportAt = now
     this.dirty = false
     const statuses = (reply.questions ?? {}) as Record<string, QuestionStatus>
     for (const [id, status] of Object.entries(statuses)) {

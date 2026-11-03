@@ -181,6 +181,22 @@ def test_context_per_session_and_account_limits_without_double_counting():
     assert -1 in r.snapshot(3)["ctx"]
 
 
+def test_the_freshest_limits_reading_stands_and_an_empty_one_takes_nothing_away():
+    r = Registry()
+    fresh = [{"kind": "five_hour", "percent": 10}, {"kind": "seven_day", "percent": 33}]
+    stale = [{"kind": "five_hour", "percent": 4}, {"kind": "seven_day", "percent": 31}]
+    r.report(report("pc1", "a", 1, "A", "working", limits=fresh, limits_age=2), now=100)
+    # An idle session's heartbeat repeats a reading it took an hour ago: it does not replace the fresh one.
+    r.report(report("pc1", "b", 1, "B", "idle", limits=stale, limits_age=3600), now=101)
+    assert r.limits_summary(102)["kinds"]["five_hour"]["percent"] == 10
+    # A session with no reading yet reports an empty list: the known reading stays.
+    r.report(report("pc1", "c", 1, "C", "idle", limits=[]), now=103)
+    assert r.limits_summary(104)["kinds"]["seven_day"]["percent"] == 33
+    # A newer measurement replaces it; a report without an age (an older mod) counts as measured now.
+    r.report(report("pc1", "b", 2, "B", "working", limits=stale), now=105)
+    assert r.limits_summary(106)["kinds"]["five_hour"]["percent"] == 4
+
+
 def test_long_texts_several_options_and_paging_limits():
     r = Registry()
     long_text = "x" * 500

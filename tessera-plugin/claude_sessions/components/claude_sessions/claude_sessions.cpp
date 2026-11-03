@@ -348,7 +348,8 @@ class OverviewTile : public tessera::Tile {
       const SessionRow &row = o.rows[i];
       std::string state = state_word(plugin_, row.state);
       if (row.asks > 1) state = std::to_string(row.asks) + " · " + state;
-      if (columns_ >= 2 && row.ctx >= 0 && !std::strcmp(row.state, "work")) state = ctx_word(plugin_, row.ctx) + " · " + state;
+      // Every session's context fill, idle ones too: on a tile two or more columns wide there is room for it.
+      if (columns_ >= 2 && row.ctx >= 0) state = ctx_word(plugin_, row.ctx) + " · " + state;
       const int state_w = std::min(width_ / 2, ui::text_width(state, Font::BODY) + ui::px(4));
       lv_obj_set_size(row_state_[i], state_w, body_h);
       lv_obj_set_pos(row_state_[i], width_ - state_w, y + (row_h - body_h) / 2);

@@ -24,6 +24,7 @@ export const register: Register = (on, options) => {
     try {
       const usage = await h.usage()
       session.limits = usage.rateLimits
+      if (usage.rateLimits.length) session.limitsAt = await h.now()
       session.context = usage.context
     } catch {
       // No usage yet: the first measurement brings it.
@@ -58,7 +59,10 @@ export const register: Register = (on, options) => {
   on('session.measure', async ($, e, next) => {
     if (host) {
       const session = await bridge.session(host)
-      if (e.changed.includes('rateLimits')) session.limits = e.rateLimits
+      if (e.changed.includes('rateLimits')) {
+        session.limits = e.rateLimits
+        if (e.rateLimits.length) session.limitsAt = await host.now()
+      }
       if (e.changed.includes('context')) session.context = e.context
       session.touch()
     }

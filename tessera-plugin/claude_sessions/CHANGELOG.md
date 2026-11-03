@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.2
+- The tile shows the context fill of every session, idle ones too (before only a working one's). Needs the tessera-bridge mod 0.2.1 and the integration 0.2.1 for steady limits: the account's limits come from the session that measured them last, not from the idle session whose heartbeat arrived last, so the limits line no longer flips between old readings and "–".
+
 ## 0.1.1
 - The open question card asks for its question again at most every 1.5 s: the registry's `rev` moves with every report of every session, and a request per change sent `get_question` several times a second while sessions were polling (seen on the first hardware test).
 - Debug log lines (tag `claude_sessions`): tile created, tile data taken, every reply from Home Assistant, every answer sent, so a screen's log shows the plugin at work.

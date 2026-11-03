@@ -243,6 +243,7 @@ test('a measurement reports context and the account limits apart, under this ses
     { kind: 'five_hour', percent: 44, resets_at: '2026-01-01T01:09:00Z' },
     { kind: 'seven_day', percent: 11.5, resets_at: '2026-01-07T00:00:00Z' },
   ])
+  expect(last?.limits_age).toBe(2)
   expect(last?.instance).toBeDefined()
 })
 

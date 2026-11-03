@@ -57,6 +57,7 @@ the session is open (the reply doubles as the poll):
   "detail": "",                           // the permission hint's text while state is permission
   "context": { "percent": 37, "tokens": 370000, "window": 1000000 },   // or null while unknown
   "limits": [ { "kind": "five_hour", "percent": 44, "resets_at": "2026-11-03T22:00:00Z" } ],
+  "limits_age": 2,                        // seconds since this session measured its limits; null for never
   "questions": [ { "id": "toolu_01…", "nonce": "x8z1k0p3", "parts": [
       { "id": "p0", "header": "Approach", "text": "Which way?", "multi": false,
         "options": [ { "id": "o0", "label": "A", "description": "…" }, { "id": "o1", "label": "B", "description": "" } ] } ] } ]

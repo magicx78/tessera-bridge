@@ -9,6 +9,7 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -55,16 +56,33 @@ def format_remaining(resets_at: str | None, now: datetime) -> str:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
     registry: Registry = entry.runtime_data.registry
-    add(
-        [
-            SessionsSensor(registry),
-            QuestionsSensor(registry),
-            LimitSensor(registry, "five_hour"),
-            LimitSensor(registry, "seven_day"),
-            ResetSensor(registry),
-            OtherLimitsSensor(registry),
-        ]
-    )
+    sensors = [
+        SessionsSensor(registry),
+        QuestionsSensor(registry),
+        LimitSensor(registry, "five_hour"),
+        LimitSensor(registry, "seven_day"),
+        ResetSensor(registry),
+        OtherLimitsSensor(registry),
+    ]
+    _drop_stale_states(hass, sensors)
+    add(sensors)
+
+
+@callback
+def _drop_stale_states(hass: HomeAssistant, sensors: list[ClaudeSensor]) -> None:
+    """A state under one of our entity ids that none of our entities wrote (the old mod's REST states, which a session
+    still running the old mod writes again after every restart) makes Home Assistant refuse the entity ("already
+    exists - ignoring") or give it a `_2` id: such a state goes before the entities are added. A state of another
+    integration's entity under that id is left alone."""
+    entities = er.async_get(hass)
+    for sensor in sensors:
+        entity_id = entities.async_get_entity_id("sensor", DOMAIN, sensor.unique_id) or f"sensor.{sensor.slug}"
+        if hass.states.get(entity_id) is None:
+            continue
+        entry = entities.async_get(entity_id)
+        if entry is not None and entry.platform != DOMAIN:
+            continue
+        hass.states.async_remove(entity_id)
 
 
 class ClaudeSensor(SensorEntity):
@@ -73,6 +91,7 @@ class ClaudeSensor(SensorEntity):
 
     def __init__(self, registry: Registry, object_id: str, name: str) -> None:
         self.registry = registry
+        self.slug = object_id
         self._attr_unique_id = f"{DOMAIN}_{object_id}"
         self._attr_name = name
 

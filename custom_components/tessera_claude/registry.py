@@ -240,7 +240,7 @@ class Registry:
         session.context = context if isinstance(context, dict) else None
         limits = body.get("limits")
         if isinstance(limits, list):
-            self.limits[instance] = (now, [l for l in limits if isinstance(l, dict) and isinstance(l.get("kind"), str)])
+            self._take_limits(instance, limits, body.get("limits_age"), now)
         if session.state == "permission" and session.detail and session.announced_hint != session.detail:
             session.announced_hint = session.detail
             self._event("hint", handle=session.handle, session=session.name, detail=session.detail)
@@ -467,6 +467,18 @@ class Registry:
         if isinstance(percent, (int, float)):
             return max(0, min(100, round(percent)))
         return -1
+
+    def _take_limits(self, instance: str, limits: list, age: Any, now: float) -> None:
+        """A session's reading of the account's limits. Every session repeats its own reading on every heartbeat,
+        an idle one for hours: the reading measured last stands (`limits_age`: seconds since the session measured
+        it), and a session without a reading (an empty list) takes nothing away."""
+        clean = [l for l in limits if isinstance(l, dict) and isinstance(l.get("kind"), str)]
+        if not clean:
+            return
+        measured = now - age if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0 else now
+        known = self.limits.get(instance)
+        if known is None or measured >= known[0]:
+            self.limits[instance] = (measured, clean)
 
     def limits_summary(self, now: float) -> dict[str, Any]:
         """The account's limits from the instance that reported last: never summed over sessions."""
