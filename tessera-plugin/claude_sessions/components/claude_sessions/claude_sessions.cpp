@@ -404,6 +404,292 @@ class OverviewTile : public tessera::Tile {
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
 };
 
+// ---- The activity tile's motion: a small picture that works, sleeps and waits, one step a second ----
+//
+// Made of blocks and labels only (no arc, line or transform, which not every screen's LVGL has), moved by the tile's
+// on_tick: a tile has no faster clock of its own. Three kinds; the person picks one in the tile's options.
+
+enum class MotionKind : uint8_t { NONE, MOSAIC, CHOMPER, SPARK };
+enum class Mood : uint8_t { REST, WORK, WAIT, ASK };
+
+static MotionKind motion_kind(const char *value) {
+  if (!value) return MotionKind::MOSAIC;
+  if (!std::strcmp(value, "none")) return MotionKind::NONE;
+  if (!std::strcmp(value, "chomper")) return MotionKind::CHOMPER;
+  if (!std::strcmp(value, "spark")) return MotionKind::SPARK;
+  return MotionKind::MOSAIC;
+}
+
+class TileMotion {
+ public:
+  static constexpr int COLS = 5, ROWS = 3, CELLS = COLS * ROWS;  // the mosaic
+  static constexpr int STONES = 5;                               // the muncher's row
+  static constexpr int ARMS = 8, DOTS = 3;                       // the spark
+
+  void create(lv_obj_t *parent, MotionKind kind, const tessera::Plugin *plugin) {
+    kind_ = kind;
+    if (kind_ == MotionKind::NONE) return;
+    room_ = lv_obj_create(parent);
+    lv_obj_remove_style_all(room_);
+    lv_obj_remove_flag(room_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(room_, LV_OBJ_FLAG_SCROLLABLE);
+    sleep_ = plugin->text("sleep_mark");
+    ask_ = plugin->text("ask_mark");
+    if (kind_ == MotionKind::MOSAIC) {
+      for (int i = 0; i < CELLS; ++i) part_[i] = dot(theme::TRACK, false);
+    } else if (kind_ == MotionKind::CHOMPER) {
+      // The body, its mouth (a bite of the tile's own ground), its eye; the stones last, so the one in its mouth shows.
+      body_ = dot(theme::ACCENT, true);
+      mouth_ = dot(theme::CARD, true);
+      eye_ = dot(theme::CARD, true);
+      for (int i = 0; i < STONES; ++i) part_[i] = dot(theme::ACCENT, false);
+    } else {
+      body_ = dot(theme::ACCENT, true);  // the spark's core
+      for (int i = 0; i < ARMS * DOTS; ++i) part_[i] = dot(theme::ACCENT, true);
+    }
+    // A sleeping "z z z", and the "?" of a question.
+    mark_ = ui::label(room_, Font::BODY, theme::MUTED);
+    lv_obj_set_style_text_align(mark_, LV_TEXT_ALIGN_LEFT, 0);
+    hide(mark_, true);
+    hide(room_, true);
+  }
+
+  bool on() const { return kind_ != MotionKind::NONE; }
+
+  // Where the picture stands on the tile; nothing when the room is too small for it.
+  void place(int x, int y, int w, int h) {
+    if (!room_) return;
+    const bool fits = w >= ui::px(28) && h >= ui::px(18);
+    hide(room_, !fits);
+    if (!fits) {
+      w_ = h_ = 0;
+      return;
+    }
+    lv_obj_set_pos(room_, x, y);
+    if (w == w_ && h == h_) return;
+    w_ = w;
+    h_ = h;
+    lv_obj_set_size(room_, w, h);
+    layout();
+  }
+
+  // Paint one step. `frame` counts the tile's ticks; `ground` says the tile is red (a question), so the parts go white.
+  void paint(Mood mood, uint32_t frame, bool ground) {
+    if (!room_ || !w_) return;
+    mood_ = mood;
+    frame_ = frame;
+    ground_ = ground;
+    if (kind_ == MotionKind::MOSAIC) mosaic();
+    else if (kind_ == MotionKind::CHOMPER) chomper();
+    else spark();
+  }
+
+ private:
+  lv_obj_t *dot(theme::Role role, bool round) {
+    lv_obj_t *o = ui::block(room_, role);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    if (round) lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+    return o;
+  }
+
+  static void box(lv_obj_t *o, int x, int y, int w, int h) {
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, std::max(1, w), std::max(1, h));
+  }
+
+  // A block's colour and how much of it shows: a tone, or white on the red ground.
+  void fill(lv_obj_t *o, Tone tone, theme::Role normal, lv_opa_t opa = LV_OPA_COVER) {
+    if (ground_) ui::set_fill(o, Tone::NORMAL, theme::ON_ACCENT);
+    else ui::set_fill(o, tone, normal);
+    if (lv_obj_get_style_bg_opa(o, LV_PART_MAIN) != opa) lv_obj_set_style_bg_opa(o, opa, 0);
+  }
+
+  // The tile's own ground under the picture: the card, or red while a question waits.
+  void ground_fill(lv_obj_t *o) { ui::set_fill(o, ground_ ? Tone::ALERT : Tone::NORMAL, theme::CARD); }
+
+  bool blink() const { return frame_ % 2 == 0; }
+
+  void mark(const std::string &text, int x, int y, Font font, Tone tone, theme::Role normal) {
+    hide(mark_, text.empty());
+    if (text.empty()) return;
+    ui::set_font(mark_, font);
+    ui::set_text(mark_, text);
+    if (ground_) ui::set_color(mark_, theme::ON_ACCENT);
+    else ui::set_tone(mark_, tone, normal);
+    lv_obj_set_size(mark_, std::max(1, ui::text_width(text, font) + ui::px(2)), ui::line_height(font));
+    lv_obj_set_pos(mark_, x, y);
+  }
+
+  // "z", "z z", "z z z", nothing: four steps of sleep.
+  std::string zzz() const {
+    std::string out;
+    for (uint32_t i = 0; i < frame_ % 4; ++i) {
+      if (!out.empty()) out += ' ';
+      out += sleep_.c_str();
+    }
+    return out;
+  }
+
+  void layout() {
+    if (kind_ == MotionKind::MOSAIC) {
+      gap_ = std::max(2, ui::px(3));
+      size_ = std::max(2, std::min((w_ - gap_ * (COLS - 1)) / COLS, (h_ - gap_ * (ROWS - 1)) / ROWS));
+      x0_ = (w_ - (size_ * COLS + gap_ * (COLS - 1))) / 2;
+      y0_ = (h_ - (size_ * ROWS + gap_ * (ROWS - 1))) / 2;
+      for (int i = 0; i < CELLS; ++i) {
+        box(part_[i], x0_ + (i % COLS) * (size_ + gap_), y0_ + (i / COLS) * (size_ + gap_), size_, size_);
+        lv_obj_set_style_radius(part_[i], std::max(1, size_ / 5), 0);
+      }
+    } else if (kind_ == MotionKind::CHOMPER) {
+      // A pitch per stone; the body a little wider than a pitch, as high as the room allows.
+      pitch_ = std::min(w_ * 2 / (2 * STONES + 3), h_ * 10 / 11);
+      size_ = std::max(3, pitch_ * 2 / 5);
+      radius_ = std::max(4, pitch_ * 11 / 20);
+      x0_ = (w_ - pitch_ * (STONES + 1)) / 2 + pitch_ / 2;
+      y0_ = h_ / 2;
+      for (int i = 0; i < STONES; ++i) {
+        box(part_[i], x0_ + (i + 1) * pitch_ - size_ / 2, y0_ - size_ / 2, size_, size_);
+        lv_obj_set_style_radius(part_[i], std::max(1, size_ / 5), 0);
+      }
+    } else {
+      radius_ = std::max(6, std::min(w_, h_) * 23 / 50);
+    }
+  }
+
+  // Building a mosaic: a stone a second in a scattered order, then it starts anew.
+  void mosaic() {
+    static const uint8_t ORDER[CELLS] = {7, 2, 12, 0, 9, 14, 4, 11, 1, 6, 13, 3, 10, 5, 8};
+    static const uint8_t SHADE[CELLS] = {255, 170, 220, 140, 200, 255, 160, 230, 190, 150, 240, 180, 210, 165, 245};
+    bool lit[CELLS] = {};
+    int filled = 0;
+    if (mood_ == Mood::WORK) filled = std::min<int>(frame_ % (CELLS + 3), CELLS);
+    else if (mood_ == Mood::WAIT) filled = 8;
+    for (int j = 0; j < filled; ++j) lit[ORDER[j]] = true;
+    for (int i = 0; i < CELLS; ++i) {
+      lv_obj_t *c = part_[i];
+      if (mood_ == Mood::ASK) {
+        // A "!" of stones on the red ground, blinking.
+        const bool mark = i == 2 || i == 7 || i == 12;
+        fill(c, Tone::NORMAL, theme::ON_ACCENT, mark ? (blink() ? LV_OPA_COVER : LV_OPA_50) : LV_OPA_20);
+      } else if (lit[i]) {
+        fill(c, Tone::ACCENT, theme::ACCENT, SHADE[i]);
+      } else if (mood_ == Mood::WAIT && i == ORDER[filled]) {
+        fill(c, blink() ? Tone::BUSY : Tone::NORMAL, theme::TRACK);  // the next stone waits for the approval
+      } else if (mood_ == Mood::REST && i == 7 && (frame_ / 2) % 2 == 0) {
+        fill(c, Tone::NORMAL, theme::MUTED, LV_OPA_60);  // a cursor glimmering now and then
+      } else {
+        fill(c, Tone::NORMAL, theme::TRACK);
+      }
+    }
+    hide(mark_, true);
+  }
+
+  // The mosaic muncher: eats a stone a second, sleeps at rest, stands before a locked stone or a "?".
+  void chomper() {
+    int pos;  // the body's place in pitches: -1 (coming in) to STONES (gone)
+    if (mood_ == Mood::WORK) pos = static_cast<int>(frame_ % (STONES + 2)) - 1;
+    else if (mood_ == Mood::REST) pos = -1;
+    else pos = 0;
+    const bool open = mood_ == Mood::WORK && blink();
+    const bool asleep = mood_ == Mood::REST;
+    int r = asleep ? radius_ * 4 / 5 : radius_;
+    int cx = asleep ? r + ui::px(2) : x0_ + pos * pitch_, cy = asleep ? y0_ + r / 5 : y0_;
+    if (asleep) cx = std::max(cx, r);
+    box(body_, cx - r, cy - r, 2 * r, 2 * r);
+    fill(body_, asleep ? Tone::NORMAL : Tone::ACCENT, asleep ? theme::MUTED : theme::ACCENT);
+    // The mouth: a round bite of the ground at its front.
+    hide(mouth_, !open);
+    if (open) {
+      const int b = r * 31 / 50;
+      box(mouth_, cx + r - b, cy - b, 2 * b, 2 * b);
+      ground_fill(mouth_);
+    }
+    // The eye: a dot, or a line while it sleeps.
+    const int e = std::max(2, r / 4);
+    if (asleep) box(eye_, cx, cy - r / 2, r * 2 / 5, std::max(2, ui::px(2)));
+    else box(eye_, cx + r / 8, cy - r / 2 - e / 2, e, e);
+    ground_fill(eye_);
+    // The stones: eaten up to the body; at rest all of them, dim.
+    for (int i = 0; i < STONES; ++i) {
+      lv_obj_t *s = part_[i];
+      const bool eaten = !asleep && i < pos;
+      const bool gate = (mood_ == Mood::WAIT || mood_ == Mood::ASK) && i == 0;  // the stone right before it
+      hide(s, eaten || (mood_ == Mood::ASK && gate));
+      if (asleep) fill(s, Tone::NORMAL, theme::MUTED, LV_OPA_50);
+      else if (gate) fill(s, blink() ? Tone::BUSY : Tone::NORMAL, theme::TRACK);
+      else fill(s, i % 2 ? Tone::ACCENT : Tone::NORMAL, i % 2 ? theme::ACCENT : theme::MUTED);
+    }
+    if (asleep) {
+      mark(zzz(), cx + r, std::max(0, cy - r - ui::line_height(Font::BODY) / 2), Font::BODY, Tone::NORMAL, theme::MUTED);
+    } else if (mood_ == Mood::ASK) {
+      const int h = ui::line_height(Font::TITLE);
+      const std::string ask = ask_.c_str();
+      const int x = x0_ + pitch_ - ui::text_width(ask, Font::TITLE) / 2;
+      mark(ask, x, y0_ - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
+    } else {
+      hide(mark_, true);
+    }
+  }
+
+  // The spark: eight arms of three dots. At work a wave runs round it; at rest it breathes; waiting, one arm points.
+  void spark() {
+    static const int16_t COS[ARMS] = {1000, 707, 0, -707, -1000, -707, 0, 707};
+    static const int16_t SIN[ARMS] = {0, 707, 1000, 707, 0, -707, -1000, -707};
+    const int R = radius_, cx = w_ / 2, cy = h_ / 2;
+    const int core = std::max(3, R * 3 / 10);
+    box(body_, cx - core / 2, cy - core / 2, core, core);
+    const bool rest = mood_ == Mood::REST;
+    fill(body_, rest ? Tone::NORMAL : Tone::ACCENT, rest ? theme::MUTED : theme::ACCENT);
+    const int lead = static_cast<int>(frame_ % ARMS);
+    for (int a = 0; a < ARMS; ++a) {
+      int reach;  // how many dots of this arm show
+      Tone tone = Tone::ACCENT;
+      theme::Role role = theme::ACCENT;
+      if (mood_ == Mood::WORK) {
+        const int behind = (lead - a + ARMS) % ARMS;
+        reach = behind == 0 ? 3 : behind == 1 ? 2 : 1;
+      } else if (mood_ == Mood::ASK) {
+        reach = 3;
+      } else if (mood_ == Mood::WAIT && a == 0) {
+        reach = blink() ? 3 : 2;
+        tone = blink() ? Tone::BUSY : Tone::NORMAL;
+        role = theme::MUTED;
+      } else {
+        reach = rest && frame_ % 4 == 0 ? 2 : 1;
+        tone = Tone::NORMAL;
+        role = theme::MUTED;
+      }
+      for (int d = 0; d < DOTS; ++d) {
+        lv_obj_t *o = part_[a * DOTS + d];
+        hide(o, d >= reach);
+        if (d >= reach) continue;
+        const int dist = R * (3 + 3 * d) / 10, size = std::max(2, R * (26 - 4 * d) / 100);
+        box(o, cx + dist * COS[a] / 1000 - size / 2, cy + dist * SIN[a] / 1000 - size / 2, size, size);
+        fill(o, tone, role);
+      }
+    }
+    if (rest) {
+      mark(zzz(), cx + R / 2, std::max(0, cy - R - ui::line_height(Font::BODY) / 3), Font::BODY, Tone::NORMAL, theme::MUTED);
+    } else if (mood_ == Mood::ASK) {
+      const int h = ui::line_height(Font::TITLE);
+      const std::string ask = ask_.c_str();
+      mark(ask, std::min(w_ - ui::text_width(ask, Font::TITLE), cx + R + ui::px(2)),
+           cy - R / 2 - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
+    } else {
+      hide(mark_, true);
+    }
+  }
+
+ MotionKind kind_ = MotionKind::NONE;
+  Mood mood_ = Mood::REST;
+  uint32_t frame_ = 0;
+  bool ground_ = false;
+  int w_ = 0, h_ = 0, gap_ = 0, size_ = 0, x0_ = 0, y0_ = 0, pitch_ = 0, radius_ = 0;
+  tessera::Text sleep_, ask_;  // "z" and "?", from the translations
+  lv_obj_t *room_{}, *body_{}, *mouth_{}, *eye_{}, *mark_{};
+  lv_obj_t *part_[ARMS * DOTS]{};
+};
+
 // ---- The activity tile: whether Claude is at work, since when, in how many sessions, and whether one asks ----
 
 class ActivityTile : public tessera::Tile {
@@ -451,6 +737,8 @@ class ActivityTile : public tessera::Tile {
       row_state_[i] = ui::label(body_, Font::BODY, theme::MUTED);
       lv_obj_set_style_text_align(row_state_[i], LV_TEXT_ALIGN_RIGHT, 0);
     }
+    // The motion the person picked (the manifest fills in the default); its parts only.
+    motion_.create(body_, motion_kind(c.options["motion"] | "mosaic"), plugin_);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -461,8 +749,11 @@ class ActivityTile : public tessera::Tile {
     paint(tessera::epoch());
   }
 
-  // Every second: the duration counts on.
-  void on_tick(uint32_t epoch) override { paint(epoch); }
+  // Every second: the duration counts on, and the motion takes a step.
+  void on_tick(uint32_t epoch) override {
+    ++frame_;
+    paint(epoch);
+  }
 
   void on_theme() override {
     ui::set_color(title_, theme::INK);
@@ -543,6 +834,7 @@ class ActivityTile : public tessera::Tile {
       lv_obj_set_pos(of_, 0, head_ + gap_);
       ink(of_, Tone::NORMAL, theme::MUTED);
       ui::set_text(of_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
+      motion_.place(0, 0, 0, 0);
       return;
     }
 
@@ -569,13 +861,23 @@ class ActivityTile : public tessera::Tile {
     const std::string big = std::to_string(o.active);
     const bool wide = columns_ >= 2;
     const int top_room = rows_ >= 2 ? std::max(2 * body_h, bh_ / rows_ - head_) : bh_ - head_;
-    const int number_w = wide ? bw_ * 2 / 5 : bw_;
+    // The motion: at the right beside the words on a wide tile, above the number on a narrow one.
+    int anim_w = 0, anim_h = 0;
+    if (motion_.on() && wide) {
+      anim_w = std::min(bw_ / 3, top_room * 3 / 2);
+      if (anim_w < ui::px(28)) anim_w = 0;
+    } else if (motion_.on()) {
+      anim_h = top_room * 2 / 5;
+      if (anim_h - gap_ / 2 < ui::px(18)) anim_h = 0;
+    }
+    const int area = anim_w ? bw_ - anim_w - gap_ : bw_;  // what the number and the words keep
+    const int number_w = wide ? area * 2 / 5 : bw_;
     const int under = wide ? 0 : body_h;
     Font face = Font::BODY_LARGE;
     for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
       face = f;
       if (f == Font::DIGITS && !ui::covers(big, f)) continue;
-      if (ui::text_width(big, f) <= number_w && ui::line_height(f) + under <= top_room) break;
+      if (ui::text_width(big, f) <= number_w && ui::line_height(f) + under <= top_room - anim_h) break;
     }
     const int big_h = ui::line_height(face);
     hide(big_, false);
@@ -588,8 +890,8 @@ class ActivityTile : public tessera::Tile {
     if (wide) {
       // Beside the number: the time on the first line, "of N sessions" under it.
       const int body_large_h = ui::line_height(Font::BODY_LARGE);
-      const int text_x = std::min(bw_ - 1, ui::text_width(big, face) + ui::px(12));
-      const int text_w = std::max(1, bw_ - text_x);
+      const int text_x = std::min(area - 1, ui::text_width(big, face) + ui::px(12));
+      const int text_w = std::max(1, area - text_x);
       const int words_h = body_large_h + body_h;
       const int block_h = std::max(big_h, words_h);
       const int top = head_ + std::max(0, (top_room - block_h) / 2);
@@ -607,9 +909,13 @@ class ActivityTile : public tessera::Tile {
       ui::set_text(of_, of);
       ink(of_, Tone::NORMAL, theme::MUTED);
       bottom = top + block_h + gap_;
+      // Two rows high, the names start under the words: the motion ends with them.
+      const int anim_end = rows_ >= 2 ? top + block_h : head_ + top_room - gap_ / 2;
+      motion_.place(bw_ - anim_w, head_ + gap_ / 2, anim_w, anim_end - head_ - gap_ / 2);
     } else {
-      // Under the number: one word of state.
-      const int top = head_ + std::max(0, (top_room - big_h - body_h) / 2);
+      // Under the motion the number, and under it one word of state.
+      motion_.place(0, head_ + gap_ / 2, bw_, anim_h - gap_ / 2);
+      const int top = head_ + anim_h + std::max(0, (top_room - anim_h - big_h - body_h) / 2);
       lv_obj_set_size(big_, bw_, big_h);
       lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_pos(big_, 0, top);
@@ -624,6 +930,7 @@ class ActivityTile : public tessera::Tile {
       ink(of_, word_tone, theme::MUTED);
       bottom = top + big_h + body_h + gap_;
     }
+    motion_.paint(asks ? Mood::ASK : waits ? Mood::WAIT : busy ? Mood::WORK : Mood::REST, frame_, grounded_);
 
     // Two rows high or more: the names of the active sessions.
     if (rows_ < 2) return;
@@ -664,8 +971,205 @@ class ActivityTile : public tessera::Tile {
   int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0;
   int pad_ = 0, bw_ = 1, bh_ = 1;
   bool has_entity_ = false, grounded_ = false;
+  uint32_t frame_ = 0;
+  TileMotion motion_;
   lv_obj_t *ground_{}, *body_{}, *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{};
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
+};
+
+// ---- The limits tile: the account's windows (five hours, the week, and any window of one model the sessions
+// report, a Fable or Opus week one day), each a bar with a mark where an even pace would stand ----
+
+static constexpr uint32_t ICON_GAUGE = 0xF029A;  // gauge
+static constexpr int MAX_LIMIT_ROWS = 4;
+
+class LimitsTile : public tessera::Tile {
+ public:
+  explicit LimitsTile(ClaudeSessions *plugin) : plugin_(plugin) {}
+
+  void create(const tessera::TileContext &c) override {
+    width_ = c.width;
+    height_ = c.height;
+    entity_ = c.entity ? c.entity : "";
+    tile_ = c.tile;
+    name_ = c.name && *c.name ? c.name : plugin_->text("limits_title");
+    const bool large = ui::large();
+    gap_ = ui::px(large ? 6 : 4);
+    bar_h_ = std::max(4, ui::px(large ? 10 : 7));
+    icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
+    title_ = ui::label(c.parent, Font::TITLE, theme::INK);
+    head_ = std::max(ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL));
+    note_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    for (int i = 0; i < MAX_LIMIT_ROWS; ++i) {
+      Row &r = row_[i];
+      r.name = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
+      r.pct = ui::label(c.parent, Font::TITLE, theme::INK);
+      lv_obj_set_style_text_align(r.pct, LV_TEXT_ALIGN_RIGHT, 0);
+      r.track = ui::block(c.parent, theme::TRACK);
+      r.fill = ui::block(r.track, theme::ACCENT);
+      r.pace = ui::block(c.parent, theme::INK);
+      r.reset = ui::label(c.parent, Font::BODY, theme::MUTED);
+      for (lv_obj_t *o : {r.track, r.fill, r.pace}) {
+        lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+      }
+    }
+  }
+
+  void on_state(JsonObjectConst data) override {
+    wait_ = data["wait"] | "";
+    has_entity_ = !data["state"].isNull();
+    JsonObjectConst a = data["attributes"];
+    if (has_entity_ && !a.isNull()) {
+      // Only the limits: the other tiles of the same sensor keep the sessions model to themselves.
+      l5h_ = a["l5h"] | -1;
+      lwk_ = a["lwk"] | -1;
+      l5h_at_ = a["l5h_at"] | 0u;
+      lwk_at_ = a["lwk_at"] | 0u;
+      JsonArrayConst names = a["lx_names"], lx = a["lx"];
+      extra_ = 0;
+      for (size_t i = 0; i < names.size() && extra_ < MAX_LIMIT_ROWS - 2; ++i) {
+        copy(extra_name_[extra_], names[i] | "");
+        extra_pct_[extra_] = i < lx.size() ? (lx[i] | -1) : -1;
+        extra_ += 1;
+      }
+      valid_ = true;
+    }
+    paint(tessera::epoch());
+  }
+
+  // The resets count down: once a minute is enough.
+  void on_tick(uint32_t epoch) override {
+    if (epoch / 60 != painted_minute_) paint(epoch);
+  }
+
+  void on_theme() override { paint(tessera::epoch()); }
+
+  void on_tap() override {
+    tessera::open_card(plugin_->plugin_id(), "sessions", roomy::plain(entity_), tile_);
+  }
+
+ private:
+  struct Row {
+    lv_obj_t *name{}, *pct{}, *track{}, *fill{}, *pace{}, *reset{};
+  };
+
+  // The colour of a fill: the accent, amber from 70 %, red from 90 %.
+  static Tone fill_tone(int percent) { return percent >= 90 ? Tone::ALERT : percent >= 70 ? Tone::BUSY : Tone::NORMAL; }
+
+  void paint(uint32_t epoch) {
+    painted_minute_ = epoch / 60;
+    const bool ready = has_entity_ && valid_;
+    ui::set_text(title_, roomy::plain(name_));
+    ui::set_color(title_, theme::INK);
+    ui::set_text(icon_, ui::icon(ICON_GAUGE));
+    int worst = std::max(l5h_, lwk_);
+    for (int i = 0; i < extra_; ++i) worst = std::max(worst, extra_pct_[i]);
+    ui::set_tone(icon_, ready && worst >= 70 ? fill_tone(worst) : Tone::NORMAL, theme::MUTED);
+    const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
+    lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
+    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
+    lv_obj_set_width(title_, std::max(1, width_ - icon_w));
+
+    for (Row &r : row_)
+      for (lv_obj_t *o : {r.name, r.pct, r.track, r.pace, r.reset}) hide(o, true);
+    if (!ready) {
+      hide(note_, false);
+      lv_obj_set_size(note_, width_, ui::line_height(Font::BODY));
+      lv_obj_set_pos(note_, 0, head_ + gap_);
+      ui::set_color(note_, theme::MUTED);
+      ui::set_text(note_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
+      return;
+    }
+    hide(note_, true);
+
+    // The windows: five hours and the week always, then the model windows the sessions reported.
+    struct Window {
+      std::string name;
+      int pct;
+      uint32_t at, span;
+    };
+    Window win[MAX_LIMIT_ROWS];
+    int n = 0;
+    win[n++] = {plugin_->text("limit_5h"), l5h_, l5h_at_, 5 * 3600};
+    win[n++] = {plugin_->text("limit_week"), lwk_, lwk_at_, 7 * 86400};
+    for (int i = 0; i < extra_ && n < MAX_LIMIT_ROWS; ++i)
+      win[n++] = {tessera::fill(plugin_->text("limit_model"), "n", extra_name_[i]), extra_pct_[i], 0, 0};
+
+    // As many as the tile holds; with the reset under each bar when there is room for it.
+    const int body_h = ui::line_height(Font::BODY), line_h = std::max(body_h, ui::line_height(Font::TITLE));
+    const int room = height_ - head_ - gap_;
+    const int short_h = line_h + gap_ / 2 + bar_h_ + gap_, full_h = short_h + body_h;
+    const int shown = std::max(1, std::min(n, room / short_h));
+    const bool with_reset = shown * full_h <= room;
+    const int row_h = with_reset ? full_h : short_h;
+    const int step = std::max(row_h, room / shown);
+    for (int i = 0; i < shown; ++i) {
+      const Window &w = win[i];
+      Row &r = row_[i];
+      const int y = head_ + gap_ + i * step + (step - row_h) / 2;
+      const Tone tone = fill_tone(w.pct);
+      // The name at the left, the percent at the right, on one line.
+      const std::string pct = percent_word(plugin_, w.pct);
+      const int pct_w = std::min(width_ / 2, ui::text_width(pct, Font::TITLE) + ui::px(2));
+      hide(r.name, false);
+      hide(r.pct, false);
+      lv_obj_set_size(r.pct, pct_w, line_h);
+      lv_obj_set_pos(r.pct, width_ - pct_w, y);
+      ui::set_text(r.pct, pct);
+      // The number stays ink (amber text reads poorly on a light theme); red only near the end.
+      if (w.pct < 0) ui::set_color(r.pct, theme::MUTED);
+      else if (w.pct >= 90) ui::set_tone(r.pct, Tone::ALERT, theme::INK);
+      else ui::set_color(r.pct, theme::INK);
+      lv_obj_set_size(r.name, std::max(1, width_ - pct_w - ui::px(4)), body_h);
+      lv_obj_set_pos(r.name, 0, y + (line_h - body_h) / 2);
+      ui::set_text(r.name, w.name);
+      ui::set_color(r.name, theme::INK_SOFT);
+      // The bar, and the even pace: how much of the window has passed, so a fill beyond the mark spends ahead.
+      const int bar_y = y + line_h + gap_ / 2;
+      hide(r.track, false);
+      lv_obj_set_pos(r.track, 0, bar_y);
+      lv_obj_set_size(r.track, width_, bar_h_);
+      ui::set_fill(r.track, Tone::NORMAL, theme::TRACK);
+      const int fill_w = w.pct > 0 ? std::max(bar_h_, width_ * std::min(w.pct, 100) / 100) : 0;
+      hide(r.fill, fill_w == 0);
+      if (fill_w) {
+        lv_obj_set_pos(r.fill, 0, 0);
+        lv_obj_set_size(r.fill, fill_w, bar_h_);
+        ui::set_fill(r.fill, tone, theme::ACCENT);
+      }
+      const bool timed = w.span && w.at && epoch && w.at > epoch && w.at - epoch <= w.span;
+      hide(r.pace, !timed);
+      if (timed) {
+        const uint32_t passed = w.span - (w.at - epoch);
+        const int mark_w = std::max(2, ui::px(3)), over = std::max(2, ui::px(3));
+        const int x = static_cast<int>(static_cast<uint64_t>(width_ - mark_w) * passed / w.span);
+        lv_obj_set_pos(r.pace, x, bar_y - over);
+        lv_obj_set_size(r.pace, mark_w, bar_h_ + 2 * over);
+        ui::set_fill(r.pace, Tone::NORMAL, theme::INK);
+        lv_obj_move_foreground(r.pace);
+      }
+      // Under the bar: when the window starts anew.
+      if (with_reset && timed) {
+        hide(r.reset, false);
+        lv_obj_set_size(r.reset, width_, body_h);
+        lv_obj_set_pos(r.reset, 0, bar_y + bar_h_ + gap_ / 2);
+        ui::set_text(r.reset, tessera::fill(plugin_->text("reset_in"), "n", span_word(plugin_, w.at - epoch)));
+        ui::set_color(r.reset, theme::MUTED);
+      }
+    }
+  }
+
+  ClaudeSessions *plugin_;
+  tessera::Text entity_, name_, wait_;
+  int width_ = 0, height_ = 0, tile_ = -1, head_ = 0, gap_ = 0, bar_h_ = 6;
+  int l5h_ = -1, lwk_ = -1, extra_ = 0;
+  int extra_pct_[MAX_LIMIT_ROWS]{};
+  char extra_name_[MAX_LIMIT_ROWS][20]{};
+  uint32_t l5h_at_ = 0, lwk_at_ = 0, painted_minute_ = 0;
+  bool has_entity_ = false, valid_ = false;
+  lv_obj_t *icon_{}, *title_{}, *note_{};
+  Row row_[MAX_LIMIT_ROWS];
 };
 
 // ---- The background tile: what runs in the background of the sessions (shells, agents, monitors, workflows), and
@@ -1473,6 +1977,7 @@ void ClaudeSessions::setup() {
   });
   add_tile("activity", [this]() { return new ActivityTile(this); });
   add_tile("background", [this]() { return new BackgroundTile(this); });
+  add_tile("limits", [this]() { return new LimitsTile(this); });
   add_card("sessions", [this]() { return new SessionsCard(this); });
   add_card("question", [this]() { return new QuestionCard(this); });
   add_bar_item("asks", [this]() { return bar(); });

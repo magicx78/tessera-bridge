@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.7
+version: 0.1.8
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
@@ -50,12 +50,31 @@ tiles:
     name: tile_activity_name
     icon: robot
     sizes: { min: 1x1, max: 2x2 }
-    memory: 1200
+    # The words and numbers, and the parts of the busiest motion (the spark: 25 dots).
+    memory: 3400
     domains: [sensor]
     has_attributes: [h, states]
     attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, active, active_since,
                  last_active]
     example: tile_activity_example
+    preview: { title: "{name}", value: "{state}" }
+    # A small picture that moves while Claude works, sleeps at rest and waits with the person: one step a second, with
+    # the tile's clock. Each person picks the one they like.
+    options:
+      - { id: motion, kind: choice, label: opt_motion, hint: opt_motion_hint, default: mosaic,
+          choices: [{ value: mosaic, label: motion_mosaic }, { value: chomper, label: motion_chomper },
+                    { value: spark, label: motion_spark }, { value: none, label: motion_none }] }
+  # The account's limits: five hours and the week as bars, each with a mark where an even pace would stand and when
+  # it starts anew; any window of one model the sessions report (lx_names, lx) comes as a further bar. Same sensor.
+  - id: limits
+    name: tile_limits_name
+    icon: gauge
+    sizes: { min: 1x1, max: 3x2 }
+    memory: 2600
+    domains: [sensor]
+    has_attributes: [l5h, lwk]
+    attributes: [l5h, l5h_at, lwk, lwk_at, lx_names, lx]
+    example: tile_limits_example
     preview: { title: "{name}", value: "{state}" }
   # What runs in the background of the sessions (shells, agents, monitors, workflows) and since when: the integration's
   # background sensor (sensor.claude_background), newest first.

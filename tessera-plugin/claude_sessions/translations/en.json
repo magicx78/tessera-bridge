@@ -62,7 +62,13 @@
     "background_since": "since {n}",
     "background_runs": "running",
     "background_more": "+1 more | +{n} more",
-    "choose_background_sensor": "Choose the background sensor"
+    "choose_background_sensor": "Choose the background sensor",
+    "sleep_mark": "z",
+    "ask_mark": "?",
+    "limits_title": "Claude limits",
+    "limit_5h": "5 hours",
+    "limit_week": "Week",
+    "limit_model": "Week {n}"
   },
   "app": {
     "name": "Claude sessions",
@@ -82,6 +88,14 @@
     "setting_hint_popup": "Approval popup",
     "setting_hint_popup_hint": "A permission prompt waiting on the PC opens a popup on the screen (it is answered on the PC).",
     "tile_background_name": "Claude in the background",
-    "tile_background_example": "2 tasks · since 14:05"
+    "tile_background_example": "2 tasks · since 14:05",
+    "opt_motion": "Animation",
+    "opt_motion_hint": "What moves on the tile: at work, asleep, waiting for you. One step a second.",
+    "motion_mosaic": "Building a mosaic",
+    "motion_chomper": "Mosaic muncher",
+    "motion_spark": "Claude spark",
+    "motion_none": "None",
+    "tile_limits_name": "Claude limits",
+    "tile_limits_example": "5 hours 44% · week 12%"
   }
 }

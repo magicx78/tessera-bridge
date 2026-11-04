@@ -22,8 +22,8 @@
 - 👆 **Fragen am Screen beantworten** – stellt Claude eine Auswahlfrage (AskUserQuestion), erscheint sie als Popup. Ein Tipp beantwortet sie in der richtigen Session. Das klappt mit mehreren Teilen, mit Mehrfachauswahl und mit **Am PC**, wenn der Rechner übernehmen soll.
 - 🏁 **Genau eine Antwort zählt** – PC und Screen, zwei Screens oder ein Doppeltipp: Home Assistant entscheidet, wer zuerst war. Die anderen Dialoge schließen sich von selbst.
 - 🔔 **Freigabe-Hinweise** – wartet eine Session am PC auf eine Freigabe, zeigt der Screen einen Hinweis. Antworten musst du am PC.
-- 📊 **Limits des Kontos** – 5-Stunden- und Wochen-Limit mit Reset-Zeit, als Sensoren und auf der Kachel.
-- ⏱️ **Aktivität** – ob Claude gerade arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, wird die ganze Kachel rot.
+- 📊 **Limits des Kontos** – 5-Stunden- und Wochen-Limit mit Reset-Zeit, als Sensoren und auf einer eigenen Kachel mit Balken und Tempo-Marke.
+- ⏱️ **Aktivität** – ob Claude gerade arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, wird die ganze Kachel rot. Dazu eine kleine Animation zur Wahl (Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine), die arbeitet, schläft und wartet.
 - 🧵 **Hintergrund-Aufgaben** – Shells, Agents, Monitore und Workflows, die im Hintergrund laufen, mit ihrer Startzeit.
 - 🔊 **Gong und Sprachausgabe** – auf Wunsch spielt Chime TTS einen Gong und liest die Frage vor.
 
@@ -60,7 +60,8 @@ Mehrere Sessions dürfen gleichzeitig fragen, auch von verschiedenen Rechnern. G
 | Kachel | Größen | Zeigt |
 |---|---|---|
 | **Claude-Sessions** | 1×1 bis 3×3 | Die Sessions mit ihrem Zustand und die offenen Fragen als Badge. Ab zwei Zeilen Höhe stehen die Limits in der letzten Zeile. Ein Tipp öffnet die Sessions-Karte. |
-| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. |
+| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. Option „Animation“: Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine. |
+| **Claude-Limits** | 1×1 bis 3×2 | 5-Stunden- und Wochenlimit als Balken, mit Tempo-Marke (wo ein gleichmäßiger Verbrauch stünde) und Reset. Meldet Claude Code ein Modellfenster (z. B. Fable), kommt es als eigener Balken dazu. |
 | **Claude im Hintergrund** | 1×1 bis 3×3 | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. |
 
 Dazu kommen:
@@ -127,6 +128,7 @@ Im Layout die Kacheln platzieren, sie stehen in der Gruppe Plugins:
 |---|---|
 | **Claude-Sessions** | `sensor.claude_sessions` |
 | **Claude aktiv** | `sensor.claude_sessions` |
+| **Claude-Limits** | `sensor.claude_sessions` |
 | **Claude im Hintergrund** | `sensor.claude_background` |
 
 Mehr steht in [`tessera-plugin/claude_sessions/README.de.md`](tessera-plugin/claude_sessions/README.de.md).

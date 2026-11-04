@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+- The activity tile moves: a small picture that works while Claude works, sleeps at rest, waits with an approval (amber) and points at a question (on the red ground). One step a second, with the tile's clock. Each tile picks its own in the editor, option "Animation": "Building a mosaic" (default: a 5x3 mosaic laid stone by stone), "Mosaic muncher" (eats a row of stones), "Claude spark" (a wave runs round eight arms) or "None". Beside the words on a wide tile, above the number on 1x1; hidden where the tile has no room for it. Blocks and labels only, so every screen draws it.
+- A fourth tile, `limits` ("Claude limits", 1x1 to 3x2): the account's windows as bars, five hours and the week, each with its percent (amber from 70 %, red from 90 %), a mark where an even pace through the window would stand (a fill past the mark spends ahead) and, where there is room, when it starts anew. Any window of one model the sessions report (`seven_day_<model>`, the sensor's `lx_names`/`lx`) comes as a further bar by itself, so a Fable or Opus week shows the day Claude Code reports one; today it reports only five hours and the week. A tap opens the sessions card.
+
 ## 0.1.7
 - A third tile, `background` ("Claude in the background", 1x1 to 3x3): what runs in the background of the sessions (shells started with `run_in_background`, background agents, monitors, workflows), newest first, each with its kind, its title and when it started ("14:05", on two columns or more also "· 12 min"); a badge with the number. On 1x1 the number big and "since" the oldest. Needs the integration 0.2.4 (`sensor.claude_background`) and the mod 0.2.2, which reports each session's background tasks.
 

@@ -62,7 +62,13 @@
     "background_since": "seit {n}",
     "background_runs": "läuft",
     "background_more": "+1 weitere | +{n} weitere",
-    "choose_background_sensor": "Hintergrund-Sensor wählen"
+    "choose_background_sensor": "Hintergrund-Sensor wählen",
+    "sleep_mark": "z",
+    "ask_mark": "?",
+    "limits_title": "Claude-Limits",
+    "limit_5h": "5 Stunden",
+    "limit_week": "Woche",
+    "limit_model": "Woche {n}"
   },
   "app": {
     "name": "Claude-Sessions",
@@ -82,6 +88,14 @@
     "setting_hint_popup": "Freigabe als Popup",
     "setting_hint_popup_hint": "Eine am PC wartende Freigabe-Anfrage öffnet ein Popup auf dem Screen (beantwortet wird sie am PC).",
     "tile_background_name": "Claude im Hintergrund",
-    "tile_background_example": "2 Aufgaben · seit 14:05"
+    "tile_background_example": "2 Aufgaben · seit 14:05",
+    "opt_motion": "Animation",
+    "opt_motion_hint": "Was sich auf der Kachel bewegt: arbeitet, schläft, wartet auf dich. Ein Schritt pro Sekunde.",
+    "motion_mosaic": "Mosaik bauen",
+    "motion_chomper": "Mosaik-Fresser",
+    "motion_spark": "Claude-Funke",
+    "motion_none": "Keine",
+    "tile_limits_name": "Claude-Limits",
+    "tile_limits_example": "5 Stunden 44% · Woche 12%"
   }
 }

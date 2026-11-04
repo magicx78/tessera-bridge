@@ -18,6 +18,55 @@ tiles:
     name: At rest
     entity: sensor.claude_sessions_empty
     sizes: [1x1, 2x1]
+  - tile: activity
+    name: Mosaic at work
+    entity: sensor.claude_sessions_work
+    sizes: [1x1, 2x1]
+  - tile: activity
+    name: Muncher at work
+    entity: sensor.claude_sessions_work
+    options: { motion: chomper }
+    sizes: [1x1, 2x1, 2x2]
+  - tile: activity
+    name: Muncher waits
+    entity: sensor.claude_sessions_perm
+    options: { motion: chomper }
+    sizes: [2x1]
+  - tile: activity
+    name: Muncher asks
+    entity: sensor.claude_sessions
+    options: { motion: chomper }
+    sizes: [2x1]
+  - tile: activity
+    name: Muncher sleeps
+    entity: sensor.claude_sessions_empty
+    options: { motion: chomper }
+    sizes: [1x1, 2x1]
+  - tile: activity
+    name: Spark at work
+    entity: sensor.claude_sessions_work
+    options: { motion: spark }
+    sizes: [1x1, 2x1, 2x2]
+  - tile: activity
+    name: Spark sleeps
+    entity: sensor.claude_sessions_empty
+    options: { motion: spark }
+    sizes: [2x1]
+  - tile: activity
+    name: No motion
+    entity: sensor.claude_sessions_work
+    options: { motion: none }
+    sizes: [1x1, 2x1]
+  - tile: limits
+    entity: sensor.claude_sessions
+    sizes: [1x1, 2x1, 2x2, 3x2]
+  - tile: limits
+    name: Running hot
+    entity: sensor.claude_sessions_work
+    sizes: [1x1, 2x2]
+  - tile: limits
+    name: No sensor
+    sizes: [1x1]
   - tile: background
     entity: sensor.claude_background
     sizes: [1x1, 2x1, 2x2, 3x3]
@@ -47,7 +96,9 @@ states:
     state: "3"
     attributes:
       rev: 41
-      event: "question:qab7"
+      # No event here: a new question would open its popup over every picture of the tiles (the popup itself is
+      # checked on the glass).
+      event: ""
       open: 2
       h: [sab3, sab5, sab1]
       names: [tessera-bridge, homelab-docs, garden-irrigation]
@@ -64,6 +115,48 @@ states:
       lwk_at: "{epoch+3d}"
       lx_names: [opus]
       lx: [8]
+  sensor.claude_sessions_work:
+    state: "2"
+    attributes:
+      rev: 7
+      event: ""
+      open: 0
+      h: [sab3, sab1]
+      names: [tessera-bridge, garden-irrigation]
+      states: [work, work]
+      ctx: [37, 12]
+      asks: [0, 0]
+      q: ["", ""]
+      active: 2
+      active_since: "{epoch-12m}"
+      last_active: "{epoch}"
+      l5h: 78
+      l5h_at: "{epoch+2h}"
+      lwk: 91
+      lwk_at: "{epoch+1d}"
+      lx_names: [fable]
+      lx: [64]
+  sensor.claude_sessions_perm:
+    state: "2"
+    attributes:
+      rev: 8
+      event: ""
+      open: 0
+      h: [sab5, sab1]
+      names: [homelab-docs, garden-irrigation]
+      states: [perm, work]
+      ctx: [62, 12]
+      asks: [0, 0]
+      q: ["", ""]
+      active: 2
+      active_since: "{epoch-4m}"
+      last_active: "{epoch}"
+      l5h: 44
+      l5h_at: "{epoch+1h}"
+      lwk: 12
+      lwk_at: "{epoch+3d}"
+      lx_names: []
+      lx: []
   sensor.claude_sessions_empty:
     state: "0"
     attributes:
