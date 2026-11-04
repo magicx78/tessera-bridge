@@ -56,7 +56,13 @@
     "span_now": "<1 min",
     "span_min": "{n} min",
     "span_hm": "{a} h {b} min",
-    "span_dh": "{a} T {b} h"
+    "span_dh": "{a} T {b} h",
+    "background_title": "Im Hintergrund",
+    "background_none": "Nichts im Hintergrund",
+    "background_since": "seit {n}",
+    "background_runs": "läuft",
+    "background_more": "+1 weitere | +{n} weitere",
+    "choose_background_sensor": "Hintergrund-Sensor wählen"
   },
   "app": {
     "name": "Claude-Sessions",
@@ -74,6 +80,8 @@
     "setting_question_popup": "Frage als Popup",
     "setting_question_popup_hint": "Eine neue Frage von Claude öffnet ein Popup auf dem Screen; ein Tipp darauf öffnet die Frage.",
     "setting_hint_popup": "Freigabe als Popup",
-    "setting_hint_popup_hint": "Eine am PC wartende Freigabe-Anfrage öffnet ein Popup auf dem Screen (beantwortet wird sie am PC)."
+    "setting_hint_popup_hint": "Eine am PC wartende Freigabe-Anfrage öffnet ein Popup auf dem Screen (beantwortet wird sie am PC).",
+    "tile_background_name": "Claude im Hintergrund",
+    "tile_background_example": "2 Aufgaben · seit 14:05"
   }
 }

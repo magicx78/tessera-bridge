@@ -28,6 +28,11 @@ KEEP_ENDED = 60.0
 LIST_LIMIT = 12
 # The longest name in the sensor's lists.
 NAME_LIMIT = 24
+# How many background tasks a session keeps, and the background sensor's lists carry; the longest title.
+TASK_LIMIT = 8
+BACKGROUND_LIMIT = 10
+TITLE_LIMIT = 48
+TASK_KINDS = ("shell", "agent", "monitor", "workflow")
 
 STATE_ORDER = {"asking": 0, "permission": 1, "working": 2, "idle": 3, "lost": 4, "ended": 5}
 # The states in which a session does something or waits for the person: what the activity tile counts.
@@ -57,6 +62,8 @@ class Session:
     # Since when the session is active without a break (0: it is not), and when it was active last (0: never).
     active_since: float = 0.0
     last_active: float = 0.0
+    # What runs in its background, as it reported last: id, kind, title and the start on the registry's clock.
+    tasks: list[dict[str, Any]] | None = None
 
     def shown_state(self, now: float) -> str:
         if self.ended:
@@ -254,9 +261,36 @@ class Registry:
             self._event("hint", handle=session.handle, session=session.name, detail=session.detail)
         if session.state != "permission":
             session.announced_hint = ""
+        self._take_tasks(session, body.get("tasks"), now)
         self._sync_questions(session, body, now)
         self._changed()
         return {"ok": True, "handle": session.handle, "questions": self._statuses(session, body)}
+
+    @staticmethod
+    def _take_tasks(session: Session, reported: Any, now: float) -> None:
+        """The session's background tasks from its report. Each comes with its age in seconds (the PC's clock is not
+        this one); a task already known keeps its start, so the time does not wander with every report."""
+        known = {t["id"]: t for t in session.tasks or []}
+        tasks: list[dict[str, Any]] = []
+        for raw in reported if isinstance(reported, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            task_id = _text(raw.get("id"), 64)
+            if not task_id or any(t["id"] == task_id for t in tasks):
+                continue
+            age = raw.get("age")
+            age = float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0 else 0.0
+            kind = _text(raw.get("kind"))
+            before = known.get(task_id)
+            tasks.append(
+                {
+                    "id": task_id,
+                    "kind": kind if kind in TASK_KINDS else "shell",
+                    "title": _text(raw.get("title"), TITLE_LIMIT) or task_id,
+                    "started": before["started"] if before else now - age,
+                }
+            )
+        session.tasks = tasks[-TASK_LIMIT:]
 
     def _sync_questions(self, session: Session, body: dict[str, Any], now: float) -> None:
         reported = body.get("questions")
@@ -516,6 +550,18 @@ class Registry:
                 "resets_at": limit.get("resets_at") if isinstance(limit.get("resets_at"), str) else None,
             }
         return summary
+
+    def background(self, now: float) -> list[dict[str, Any]]:
+        """Every background task of the sessions that report, newest first: a lost or ended session's tasks are not
+        known to run."""
+        rows = []
+        for session in self.sessions.values():
+            if session.shown_state(now) in ("lost", "ended"):
+                continue
+            for task in session.tasks or []:
+                rows.append({**task, "session": session.name, "session_handle": session.handle})
+        rows.sort(key=lambda t: (-t["started"], t["session_handle"], t["id"]))
+        return rows
 
     def live_sessions(self, now: float) -> list[Session]:
         return [s for s in self.sessions.values() if s.shown_state(now) not in ("ended",)]

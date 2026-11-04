@@ -318,5 +318,25 @@ def test_lines_stay_under_the_screens_48_bytes():
     assert wrap_lines("") == []
 
 
+def test_background_tasks_keep_their_start_and_go_with_their_session():
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "b1", "kind": "shell", "title": "Build the firmware", "age": 30}]), now=100)
+    r.report(report("pc1", "b", 1, "B", "idle", tasks=[{"id": "a1", "kind": "agent", "title": "x" * 200, "age": 0}, {"id": "", "kind": "shell"}]), now=110)
+    rows = r.background(110)
+    # Newest first; an unknown kind is a shell, a long title is cut, a task without an id is dropped.
+    assert [(t["id"], t["session"], t["started"]) for t in rows] == [("a1", "B", 110), ("b1", "A", 70)]
+    assert len(rows[0]["title"]) == 48 and rows[1]["kind"] == "shell"
+    # A later report with a rounded age does not move the start.
+    r.report(report("pc1", "a", 2, "A", "working", tasks=[{"id": "b1", "kind": "shell", "title": "Build the firmware", "age": 46}]), now=115)
+    assert [t["started"] for t in r.background(115) if t["id"] == "b1"] == [70]
+    # The task ends: it goes. A lost session's tasks are not shown, an ended one's neither.
+    r.report(report("pc1", "a", 3, "A", "idle", tasks=[]), now=120)
+    assert [t["id"] for t in r.background(120)] == ["a1"]
+    assert r.background(110 + LOST_AFTER + 1) == []
+    r.report(report("pc1", "b", 2, "B", "idle", tasks=[{"id": "a1", "kind": "agent", "title": "t", "age": 0}]), now=200)
+    r.end({"instance": "pc1", "session": "b"}, now=201)
+    assert r.background(202) == []
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))

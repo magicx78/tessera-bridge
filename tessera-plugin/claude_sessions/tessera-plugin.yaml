@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.6
+version: 0.1.7
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
@@ -56,6 +56,18 @@ tiles:
     attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, active, active_since,
                  last_active]
     example: tile_activity_example
+    preview: { title: "{name}", value: "{state}" }
+  # What runs in the background of the sessions (shells, agents, monitors, workflows) and since when: the integration's
+  # background sensor (sensor.claude_background), newest first.
+  - id: background
+    name: tile_background_name
+    icon: progress-clock
+    sizes: { min: 1x1, max: 3x3 }
+    memory: 1400
+    domains: [sensor]
+    has_attributes: [bg_titles]
+    attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm]
+    example: tile_background_example
     preview: { title: "{name}", value: "{state}" }
 
 cards:

@@ -1,5 +1,6 @@
 import type { SessionRateLimit } from 'claude-code'
 
+import { type BackgroundKind, type BackgroundStart, MAX_TASKS, TASK_MAX_AGE_MS } from './background'
 import { baseName, describeCall } from './describe'
 import { apiCall, quietly, type HaConfig, type Json } from './ha'
 import type { Host } from './host'
@@ -39,6 +40,9 @@ export const POLL_MS = 1_500
 
 type PendingAsk = { tool: string; detail: string; hinted: boolean }
 
+/** A background task of the session, and when it started, in the host clock's milliseconds. */
+type BackgroundTask = { kind: BackgroundKind; title: string; startedAt: number }
+
 type Waiter = (status: QuestionStatus) => void
 
 /**
@@ -60,6 +64,8 @@ export class SessionBridge {
   readonly questions = new Map<string, ReportedQuestion>()
   /** Tool calls whose permission ask is still open, by tool_use_id. */
   readonly pendingAsks = new Map<string, PendingAsk>()
+  /** What runs in the background of this session, by task id, oldest first. */
+  readonly tasks = new Map<string, BackgroundTask>()
   private readonly waiters = new Map<string, Waiter[]>()
   private lastReportAt = 0
   private dirty = true
@@ -110,7 +116,27 @@ export class SessionBridge {
       // heartbeat, and the integration keeps the freshest reading of the account, not the last one that arrived.
       limits_age: this.limitsAt && now >= this.limitsAt ? Math.round((now - this.limitsAt) / 1000) : null,
       questions: Array.from(this.questions.values()),
+      // Each background task's age in seconds, not its start: the clocks of this PC and Home Assistant differ.
+      tasks: Array.from(this.tasks.entries())
+        .filter(([, t]) => now - t.startedAt < TASK_MAX_AGE_MS)
+        .map(([id, t]) => ({ id, kind: t.kind, title: t.title, age: Math.max(0, Math.round((now - t.startedAt) / 1000)) })),
     }
+  }
+
+  /** A background task started; the oldest give way beyond MAX_TASKS. */
+  startTask(task: BackgroundStart, now: number) {
+    this.tasks.delete(task.id)
+    this.tasks.set(task.id, { kind: task.kind, title: task.title, startedAt: now })
+    for (const id of this.tasks.keys()) {
+      if (this.tasks.size <= MAX_TASKS) break
+      this.tasks.delete(id)
+    }
+    this.touch()
+  }
+
+  /** A background task ended, was stopped or failed. */
+  endTask(id: string) {
+    if (this.tasks.delete(id)) this.touch()
   }
 
   /** Sends the report; hands every open question's status to whoever waits for it. Undefined when HA is down. */

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.7
+- A third tile, `background` ("Claude in the background", 1x1 to 3x3): what runs in the background of the sessions (shells started with `run_in_background`, background agents, monitors, workflows), newest first, each with its kind, its title and when it started ("14:05", on two columns or more also "· 12 min"); a badge with the number. On 1x1 the number big and "since" the oldest. Needs the integration 0.2.4 (`sensor.claude_background`) and the mod 0.2.2, which reports each session's background tasks.
+
 ## 0.1.6
 - A second tile, `activity` ("Claude active", 1x1 to 2x2): the number of sessions working, asking or waiting for approval, since when the oldest of them has been at it ("for 12 min") or, at rest, when the last one was ("last 1 h ago"), "of N sessions", and a badge with the open questions. The tile turns red while a question waits and amber while an approval waits at the PC; a tap opens the first open question, else the sessions card; on 2x2 it lists the active sessions. Needs the integration 0.2.3 (the sensor's new attributes `q`, `active`, `active_since`, `last_active`).
 - The overview tile takes `q` too, so both tiles on one screen fill the same data.

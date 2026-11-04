@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SIGNAL_UPDATE
-from .registry import Registry
+from .registry import BACKGROUND_LIMIT, NAME_LIMIT, Registry
 
 # The names give the entity ids the old mod wrote: sensor.claude_limit_5h, sensor.claude_limit_week, sensor.claude_5h_reset.
 KNOWN_LIMITS = {"five_hour": ("claude_limit_5h", "Claude Limit 5h"), "seven_day": ("claude_limit_week", "Claude Limit Week")}
@@ -63,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
         LimitSensor(registry, "seven_day"),
         ResetSensor(registry),
         OtherLimitsSensor(registry),
+        BackgroundSensor(registry),
     ]
     _drop_stale_states(hass, sensors)
     add(sensors)
@@ -235,3 +236,34 @@ class OtherLimitsSensor(ClaudeSensor):
             attrs[kind] = limit.get("percent")
             attrs[f"{kind}_resets_in"] = format_remaining(limit.get("resets_at"), now)
         return attrs
+
+
+class BackgroundSensor(ClaudeSensor):
+    """How many background tasks run (shells, agents, monitors, workflows), and in its attributes which, of which
+    session, and since when: parallel lists, newest first, bounded for the screen."""
+
+    _attr_icon = "mdi:progress-clock"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, registry: Registry) -> None:
+        super().__init__(registry, "claude_background", "Claude Background")
+
+    @property
+    def native_value(self) -> int:
+        return len(self.registry.background(time.monotonic()))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        now = time.monotonic()
+        rows = self.registry.background(now)[:BACKGROUND_LIMIT]
+        # The registry runs on the monotonic clock; the screen counts in epoch seconds and shows the start as the
+        # clock in the house reads it.
+        wall = time.time()
+        starts = [int(wall - (now - row["started"])) for row in rows]
+        return {
+            "bg_titles": [row["title"] for row in rows],
+            "bg_kinds": [row["kind"] for row in rows],
+            "bg_sess": [row["session"][:NAME_LIMIT] for row in rows],
+            "bg_at": starts,
+            "bg_hm": [dt_util.as_local(datetime.fromtimestamp(at, timezone.utc)).strftime("%H:%M") for at in starts],
+        }

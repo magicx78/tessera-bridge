@@ -1,5 +1,6 @@
 import type { Register } from 'claude-code'
 
+import { backgroundStart, endedTasks, stoppedTask } from './background'
 import { readConfig } from './ha'
 import type { Host } from './host'
 import { nonce, toToolAnswers, type ToolAnswers } from './questions'
@@ -149,11 +150,31 @@ export const register: Register = (on, options) => {
     return verdict
   }).catch(($, e, next) => next(e))
 
-  // Once a tool ran (or was refused) the person has answered on the PC: the hint of that call goes.
+  // Once a tool ran (or was refused) the person has answered on the PC: the hint of that call goes. A call that
+  // started a background task (or stopped one) changes the session's list of them.
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
-    if (host && e.tool_use_id !== undefined) bridge.peek()?.settleAsk(e.tool_use_id)
+    const h = host
+    if (h && e.tool_use_id !== undefined) bridge.peek()?.settleAsk(e.tool_use_id)
+    if (h && ran.result !== undefined && ran.isError !== true) {
+      const started = backgroundStart(e.tool, e, ran.result)
+      const stopped = stoppedTask(e.tool, e, ran.result)
+      if (started || stopped) {
+        const session = await bridge.session(h)
+        if (started) session.startTask(started, await h.now())
+        if (stopped) session.endTask(stopped)
+      }
+    }
     return ran
+  }).catch(($, e, next) => next(e))
+
+  // A background task's notification says it is over (completed, failed, stopped).
+  on('prompt.submit', async ($, e, next) => {
+    if (host && e.origin.kind === 'task-notification') {
+      const session = bridge.peek()
+      for (const id of endedTasks(e.text)) session?.endTask(id)
+    }
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {

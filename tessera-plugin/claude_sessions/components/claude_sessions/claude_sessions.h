@@ -37,6 +37,16 @@ struct Overview {
   uint32_t at = 0;         // when, by the screen's clock
 };
 
+// One background task, from the background sensor's attributes: a shell, an agent, a monitor or a workflow of a
+// session, and when it started (epoch, and "HH:MM" as the house's clock reads it).
+struct BackgroundRow {
+  char title[52] = "";
+  char kind[10] = "shell";
+  char sess[28] = "";
+  char hm[6] = "";
+  uint32_t at = 0;
+};
+
 struct Option {
   char id[8] = "";
   char label[52] = "";

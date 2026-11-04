@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import { backgroundStart, endedTasks, stoppedTask } from '../hooks/background'
 import { baseName, describeCall } from '../hooks/describe'
 import { toReported, toToolAnswers } from '../hooks/questions'
 
@@ -294,4 +295,49 @@ test('the session says goodbye once, and reports nothing after it', { options: O
   expect(ha.calls.filter(c => c.path.endsWith('/end')).length).toBe(1)
   await clock.advance(60_000)
   expect(ha.reports().length).toBe(before)
+})
+
+test('background starts, stops and ends are read from the tools and the notifications', async () => {
+  expect(backgroundStart('Bash', { command: 'npm   run build', run_in_background: true }, { backgroundTaskId: 'b1' })).toEqual({
+    id: 'b1',
+    kind: 'shell',
+    title: 'npm run build',
+  })
+  expect(backgroundStart('Bash', { command: 'ls', description: 'List files' }, { stdout: '' })).toBe(null)
+  expect(backgroundStart('Agent', { description: 'x' }, { status: 'async_launched', agentId: 'a1', description: 'Review the diff' })).toEqual({
+    id: 'a1',
+    kind: 'agent',
+    title: 'Review the diff',
+  })
+  expect(backgroundStart('Agent', {}, { status: 'completed', agentId: 'a1' })).toBe(null)
+  expect(backgroundStart('Monitor', { description: 'Watch CI' }, { taskId: 'm1' })?.kind).toBe('monitor')
+  expect(backgroundStart('Workflow', {}, { status: 'async_launched', taskId: 'w1', workflowName: 'review' })?.title).toBe('review')
+  expect(stoppedTask('TaskStop', { task_id: 'b1' }, { task_id: 'b1', task_type: 'local_bash' })).toBe('b1')
+  expect(stoppedTask('Bash', {}, {})).toBe(null)
+  const two =
+    '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>\n' +
+    '<task-notification><task-id>m1</task-id><event>line</event></task-notification>' +
+    '<task-notification><task-id>a1</task-id><status>failed</status></task-notification>'
+  expect(endedTasks(two)).toEqual(['b1', 'a1'])
+})
+
+test('a background shell is reported with its age until TaskStop ends it', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg1' } }))
+  on('tool.call', { tool: 'TaskStop' }, () => ({ result: { message: 'stopped', task_id: 'bg1', task_type: 'local_bash' } }))
+
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'esphome run screen.yaml', description: 'Build the firmware', run_in_background: true, tool_use_id: 't9' })
+  await clock.advance(2_000)
+  const tasks = ha.lastReport()?.tasks as Array<{ id: string; kind: string; title: string; age: number }>
+  expect(tasks.map(t => [t.id, t.kind, t.title])).toEqual([['bg1', 'shell', 'Build the firmware']])
+
+  await clock.advance(60_000)
+  const later = ha.lastReport()?.tasks as Array<{ age: number }>
+  expect(later[0]!.age >= 60).toBe(true)
+
+  await $.tool.call({ tool: 'TaskStop', task_id: 'bg1', tool_use_id: 't10' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.tasks).toEqual([])
 })

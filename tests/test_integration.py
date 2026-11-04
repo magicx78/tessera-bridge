@@ -73,6 +73,16 @@ async def test_reports_become_sensors_and_the_display_answers(hass, hass_client)
     claim = await r.json()
     assert claim["accepted"] is False and claim["answer"] == {"p0": ["o1"]}
 
+    # A background task of session b: the background sensor lists it with its start.
+    r = await client.post("/api/tessera_claude/v1/report", json={"instance": "pc1", "session": "b", "seq": 2, "name": "Shop", "state": "working", "questions": [], "tasks": [{"id": "bg1", "kind": "shell", "title": "Build the firmware", "age": 60}]})
+    assert r.status == 200
+    await hass.async_block_till_done()
+    background = hass.states.get("sensor.claude_background")
+    assert background.state == "1"
+    assert background.attributes["bg_titles"] == ["Build the firmware"]
+    assert background.attributes["bg_sess"] == ["Shop"] and background.attributes["bg_kinds"] == ["shell"]
+    assert len(background.attributes["bg_hm"][0]) == 5 and background.attributes["bg_at"][0] > 0
+
     overview = await hass.services.async_call(DOMAIN, "get_overview", {}, blocking=True, return_response=True)
     assert len(overview["sessions"]) == 2
     assert overview["limits"]["kinds"]["five_hour"]["percent"] == 44

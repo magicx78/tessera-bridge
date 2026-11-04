@@ -22,8 +22,13 @@ static constexpr uint32_t ICON_PREV = 0xF0141;        // chevron-left
 static constexpr uint32_t ICON_NEXT = 0xF0142;        // chevron-right
 static constexpr uint32_t ICON_CHECK = 0xF012C;       // check
 static constexpr uint32_t ICON_LAPTOP = 0xF0322;
+static constexpr uint32_t ICON_TASKS = 0xF0996;     // progress-clock
+static constexpr uint32_t ICON_SHELL = 0xF0379;     // monitor
+static constexpr uint32_t ICON_WATCH = 0xF0208;     // eye
+static constexpr uint32_t ICON_WORKFLOW = 0xF0493;  // cog
 
 static constexpr int MAX_TILE_ROWS = 8;
+static constexpr int MAX_TASK_ROWS = 10;
 static constexpr int MAX_PAGE_ROWS = 8;
 static constexpr int MAX_LINES = 6;
 static constexpr int MAX_OPTIONS = 4;
@@ -663,6 +668,216 @@ class ActivityTile : public tessera::Tile {
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
 };
 
+// ---- The background tile: what runs in the background of the sessions (shells, agents, monitors, workflows), and
+// since when ----
+
+static uint32_t kind_icon(const char *kind) {
+  if (!std::strcmp(kind, "agent")) return ICON_ROBOT;
+  if (!std::strcmp(kind, "monitor")) return ICON_WATCH;
+  if (!std::strcmp(kind, "workflow")) return ICON_WORKFLOW;
+  return ICON_SHELL;
+}
+
+class BackgroundTile : public tessera::Tile {
+ public:
+  explicit BackgroundTile(ClaudeSessions *plugin) : plugin_(plugin) {}
+
+  void create(const tessera::TileContext &c) override {
+    width_ = c.width;
+    height_ = c.height;
+    columns_ = c.columns;
+    rows_ = c.rows;
+    name_ = c.name && *c.name ? c.name : plugin_->text("background_title");
+    const bool large = ui::large();
+    gap_ = ui::px(large ? 6 : 4);
+    // The head: the icon, the name, and at the right the badge with the number of tasks.
+    icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
+    title_ = ui::label(c.parent, Font::TITLE, theme::INK);
+    badge_h_ = ui::line_height(Font::BODY) + ui::px(large ? 6 : 4);
+    badge_ = ui::block(c.parent, theme::ACCENT);
+    lv_obj_set_style_radius(badge_, LV_RADIUS_CIRCLE, 0);
+    badge_text_ = ui::label(badge_, Font::BODY, theme::ON_ACCENT);
+    lv_obj_set_style_text_align(badge_text_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(badge_text_);
+    head_ = std::max({ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL), badge_h_});
+    big_ = ui::label(c.parent, Font::VALUE, theme::INK);
+    lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
+    note_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    for (int i = 0; i < MAX_TASK_ROWS; ++i) {
+      row_icon_[i] = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
+      row_title_[i] = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
+      row_when_[i] = ui::label(c.parent, Font::BODY, theme::MUTED);
+      lv_obj_set_style_text_align(row_when_[i], LV_TEXT_ALIGN_RIGHT, 0);
+    }
+  }
+
+  void on_state(JsonObjectConst data) override {
+    wait_ = data["wait"] | "";
+    has_entity_ = !data["state"].isNull();
+    JsonObjectConst a = data["attributes"];
+    if (has_entity_ && !a.isNull() && !a["bg_titles"].isNull()) {
+      tasks_.clear();
+      JsonArrayConst titles = a["bg_titles"], kinds = a["bg_kinds"], sess = a["bg_sess"], hm = a["bg_hm"];
+      JsonArrayConst at = a["bg_at"];
+      for (size_t i = 0; i < titles.size(); ++i) {
+        BackgroundRow row;
+        copy(row.title, titles[i] | "");
+        copy(row.kind, i < kinds.size() ? (kinds[i] | "shell") : "shell");
+        copy(row.sess, i < sess.size() ? (sess[i] | "") : "");
+        copy(row.hm, i < hm.size() ? (hm[i] | "") : "");
+        row.at = i < at.size() ? (at[i] | 0u) : 0u;
+        tasks_.push_back(row);
+      }
+      count_ = std::atoi(data["state"] | "0");
+      valid_ = true;
+      ESP_LOGD(TAG, "Background data: %d tasks", count_);
+    }
+    paint(tessera::epoch());
+  }
+
+  // The running times count on: once a minute is enough.
+  void on_tick(uint32_t epoch) override {
+    if (epoch / 60 != painted_minute_) paint(epoch);
+  }
+
+  void on_theme() override { paint(tessera::epoch()); }
+
+ private:
+  void paint(uint32_t epoch) {
+    painted_minute_ = epoch / 60;
+    const bool ready = has_entity_ && valid_;
+    const bool busy = ready && count_ > 0 && !tasks_.empty();
+    ui::set_text(title_, roomy::plain(name_));
+    ui::set_color(title_, theme::INK);
+    ui::set_text(icon_, ui::icon(ICON_TASKS));
+    ui::set_tone(icon_, busy ? Tone::ACCENT : Tone::NORMAL, theme::MUTED);
+    const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
+    lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
+    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
+
+    // The badge: how many run, while a list of them is shown under the head.
+    const bool listed = busy && (rows_ >= 2 || columns_ >= 2);
+    hide(badge_, !listed);
+    int badge_w = 0;
+    if (listed) {
+      const std::string n = std::to_string(count_);
+      badge_w = std::max(badge_h_, ui::text_width(n, Font::BODY) + ui::px(10));
+      lv_obj_set_size(badge_, badge_w, badge_h_);
+      lv_obj_set_pos(badge_, width_ - badge_w, (head_ - badge_h_) / 2);
+      ui::set_color(badge_text_, theme::ON_ACCENT);
+      ui::set_text(badge_text_, n);
+    }
+    lv_obj_set_width(title_, std::max(1, width_ - icon_w - (listed ? badge_w + ui::px(4) : 0)));
+
+    for (int i = 0; i < MAX_TASK_ROWS; ++i) {
+      hide(row_icon_[i], true);
+      hide(row_title_[i], true);
+      hide(row_when_[i], true);
+    }
+    const int body_h = ui::line_height(Font::BODY);
+    if (!busy) {
+      // Nothing to show: what to choose, or that nothing runs.
+      hide(big_, true);
+      hide(note_, false);
+      lv_obj_set_style_text_align(note_, LV_TEXT_ALIGN_LEFT, 0);
+      lv_obj_set_size(note_, width_, body_h);
+      lv_obj_set_pos(note_, 0, head_ + gap_);
+      ui::set_color(note_, theme::MUTED);
+      const char *key = !has_entity_ || wait_ == "wrong_entity" ? "choose_background_sensor"
+                        : !ready                                 ? "loading"
+                                                                 : "background_none";
+      ui::set_text(note_, plugin_->text(key));
+      return;
+    }
+
+    if (!listed) {
+      // One cell: the number big, under it since when the oldest runs.
+      const std::string big = std::to_string(count_);
+      const int room = height_ - head_;
+      Font face = Font::BODY_LARGE;
+      for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
+        face = f;
+        if (f == Font::DIGITS && !ui::covers(big, f)) continue;
+        if (ui::text_width(big, f) <= width_ && ui::line_height(f) + body_h <= room) break;
+      }
+      const int big_h = ui::line_height(face);
+      const int top = head_ + std::max(0, (room - big_h - body_h) / 2);
+      hide(big_, false);
+      ui::set_font(big_, face);
+      ui::set_text(big_, big);
+      ui::set_tone(big_, Tone::ACCENT, theme::INK);
+      lv_obj_set_size(big_, width_, big_h);
+      lv_obj_set_pos(big_, 0, top);
+      // The newest come first: the oldest is the last.
+      const BackgroundRow &oldest = tasks_[tasks_.size() - 1];
+      hide(note_, false);
+      lv_obj_set_style_text_align(note_, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_size(note_, width_, body_h);
+      lv_obj_set_pos(note_, 0, top + big_h);
+      ui::set_color(note_, theme::MUTED);
+      ui::set_text(note_, oldest.hm[0] ? tessera::fill(plugin_->text("background_since"), "n", oldest.hm)
+                                       : std::string(plugin_->text("background_runs")));
+      return;
+    }
+
+    // A list: per task its kind, its title, and at the right when it started and, where there is room, for how long.
+    hide(big_, true);
+    hide(note_, true);
+    const int icon_h = ui::line_height(Font::ICON_SMALL);
+    const int line_h = std::max(body_h, icon_h);
+    const int step = line_h + gap_ / 2;
+    const bool roomy_row = columns_ >= 2;
+    const int total = static_cast<int>(tasks_.size());
+    int y = head_ + gap_, shown = 0;
+    for (const BackgroundRow &row : tasks_) {
+      if (shown >= MAX_TASK_ROWS || y + line_h > height_) break;
+      // The last line that fits says how many more there are, when more than it would show.
+      const int more = total - shown;
+      if (more > 1 && (y + line_h + step > height_ || shown == MAX_TASK_ROWS - 1)) {
+        lv_obj_t *title = row_title_[shown];
+        hide(title, false);
+        lv_obj_set_size(title, width_, body_h);
+        lv_obj_set_pos(title, 0, y + (line_h - body_h) / 2);
+        ui::set_color(title, theme::MUTED);
+        ui::set_text(title, tessera::format(plugin_->text("background_more"), more));
+        break;
+      }
+      std::string when = row.hm;
+      if (roomy_row && row.at && epoch >= row.at) {
+        if (!when.empty()) when += " · ";
+        when += span_word(plugin_, epoch - row.at);
+      }
+      const int when_w = std::min(width_ / 2, ui::text_width(when, Font::BODY) + ui::px(4));
+      lv_obj_t *icon = row_icon_[shown], *title = row_title_[shown], *at = row_when_[shown];
+      hide(icon, false);
+      hide(title, false);
+      hide(at, false);
+      ui::set_text(icon, ui::icon(kind_icon(row.kind)));
+      ui::set_color(icon, theme::MUTED);
+      lv_obj_set_pos(icon, 0, y + (line_h - icon_h) / 2);
+      lv_obj_set_size(at, when_w, body_h);
+      lv_obj_set_pos(at, width_ - when_w, y + (line_h - body_h) / 2);
+      ui::set_text(at, when);
+      ui::set_color(at, theme::MUTED);
+      lv_obj_set_size(title, std::max(1, width_ - icon_w - when_w - ui::px(6)), body_h);
+      lv_obj_set_pos(title, icon_w, y + (line_h - body_h) / 2);
+      ui::set_text(title, row.title);
+      ui::set_color(title, theme::INK_SOFT);
+      y += step;
+      shown += 1;
+    }
+  }
+
+  ClaudeSessions *plugin_;
+  tessera::Text name_, wait_;
+  tessera::List<BackgroundRow> tasks_;
+  int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, head_ = 0, gap_ = 0, badge_h_ = 0, count_ = 0;
+  bool has_entity_ = false, valid_ = false;
+  uint32_t painted_minute_ = 0;
+  lv_obj_t *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *note_{};
+  lv_obj_t *row_icon_[MAX_TASK_ROWS]{}, *row_title_[MAX_TASK_ROWS]{}, *row_when_[MAX_TASK_ROWS]{};
+};
+
 // ---- The sessions card: every session, a page at a time; a tap on one with a question opens it ----
 
 class SessionsCard : public tessera::Card {
@@ -1257,6 +1472,7 @@ void ClaudeSessions::setup() {
     return new OverviewTile(this);
   });
   add_tile("activity", [this]() { return new ActivityTile(this); });
+  add_tile("background", [this]() { return new BackgroundTile(this); });
   add_card("sessions", [this]() { return new SessionsCard(this); });
   add_card("question", [this]() { return new QuestionCard(this); });
   add_bar_item("asks", [this]() { return bar(); });

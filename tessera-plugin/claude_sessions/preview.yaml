@@ -18,8 +18,31 @@ tiles:
     name: At rest
     entity: sensor.claude_sessions_empty
     sizes: [1x1, 2x1]
+  - tile: background
+    entity: sensor.claude_background
+    sizes: [1x1, 2x1, 2x2, 3x3]
+  - tile: background
+    name: Nothing
+    entity: sensor.claude_background_empty
+    sizes: [1x1, 2x1]
 
 states:
+  sensor.claude_background:
+    state: "4"
+    attributes:
+      bg_titles: ["Build the P4 firmware", "Review the registry change", "Watch the HA log", "Release checks"]
+      bg_kinds: [shell, agent, monitor, workflow]
+      bg_sess: [tessera-bridge, tessera-bridge, homelab-docs, garden-irrigation]
+      bg_at: ["{epoch-3m}", "{epoch-12m}", "{epoch-47m}", "{epoch-2h}"]
+      bg_hm: ["14:57", "14:48", "14:13", "13:00"]
+  sensor.claude_background_empty:
+    state: "0"
+    attributes:
+      bg_titles: []
+      bg_kinds: []
+      bg_sess: []
+      bg_at: []
+      bg_hm: []
   sensor.claude_sessions:
     state: "3"
     attributes:
