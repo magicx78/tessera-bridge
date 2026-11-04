@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.5
+- A single choice is marked by a tap and sent with the Send key (Next for a part before the last), as a multi-select already was: on the first hardware tests one tap answered the model before the person had read the question. The chosen option is lit in the accent on every part.
+
 ## 0.1.4
 - A question or hint request the app did not answer is sent again every 10 s, up to six times: after a start the first event was handled while the screen still waited for the app, the request could not be sent, and nothing asked again, so the open question got no popup (seen on hardware after a reboot).
 

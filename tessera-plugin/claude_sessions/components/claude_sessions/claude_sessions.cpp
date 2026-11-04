@@ -640,14 +640,15 @@ class QuestionCard : public tessera::Card {
       if (!inside(opt_bg_[i], parent_, p)) continue;
       const int index = opt_first_ + i;
       if (index >= static_cast<int>(part.options.size())) return;
+      // A tap marks; the send key sends. One tap no longer answers a single choice at once: a finger that meant the
+      // popup or the card itself landed on the first option and answered the model before the person read it.
       if (part.multi) {
         part.options[index].chosen = !part.options[index].chosen;
-        refresh();
       } else {
         for (Option &o : part.options) o.chosen = false;
         part.options[index].chosen = true;
-        advance();
       }
+      refresh();
       return;
     }
   }
@@ -738,7 +739,7 @@ class QuestionCard : public tessera::Card {
       const Option &o = part.options[first + i];
       lv_obj_set_size(opt_bg_[i], width_, opt_h);
       lv_obj_set_pos(opt_bg_[i], 0, y);
-      ui::set_fill(opt_bg_[i], o.chosen && part.multi ? Tone::ACCENT : Tone::NORMAL, theme::CARD);
+      ui::set_fill(opt_bg_[i], o.chosen ? Tone::ACCENT : Tone::NORMAL, theme::CARD);
       const int mark_w = part.multi ? ui::line_height(Font::ICON_SMALL) + ui::px(4) : 0;
       hide(opt_mark_[i], !part.multi);
       if (part.multi) {
@@ -754,13 +755,13 @@ class QuestionCard : public tessera::Card {
       lv_obj_set_size(opt_label_[i], std::max(1, width_ - x - pad_), label_h);
       lv_obj_set_pos(opt_label_[i], x, top);
       ui::set_text(opt_label_[i], o.label);
-      ui::set_color(opt_label_[i], o.chosen && part.multi ? theme::ON_ACCENT : theme::INK);
+      ui::set_color(opt_label_[i], o.chosen ? theme::ON_ACCENT : theme::INK);
       hide(opt_desc_[i], !has_desc);
       if (has_desc) {
         lv_obj_set_size(opt_desc_[i], std::max(1, width_ - x - pad_), desc_h);
         lv_obj_set_pos(opt_desc_[i], x, top + label_h);
         ui::set_text(opt_desc_[i], o.desc);
-        ui::set_color(opt_desc_[i], o.chosen && part.multi ? theme::ON_ACCENT : theme::MUTED);
+        ui::set_color(opt_desc_[i], o.chosen ? theme::ON_ACCENT : theme::MUTED);
       }
       y += opt_h + gap_;
     }
@@ -777,7 +778,7 @@ class QuestionCard : public tessera::Card {
     lv_obj_set_pos(note_, 0, height_ - key_h_ - gap_ / 2 - ui::line_height(Font::BODY));
     ui::set_text(note_, note_text(part));
     place_pc();
-    const bool needs_go = part.multi;
+    const bool needs_go = true;
     hide(go_, !needs_go);
     if (needs_go) {
       const bool last = part_ + 1 >= q.parts.size();
@@ -841,7 +842,7 @@ class QuestionCard : public tessera::Card {
   void place_pc() {
     hide(pc_, false);
     const Question &q = plugin_->question();
-    const bool half = q.valid && !done_ && part_ < q.parts.size() && q.parts[part_].multi && std::strcmp(q.status, "open") == 0;
+    const bool half = q.valid && !done_ && part_ < q.parts.size() && std::strcmp(q.status, "open") == 0;
     lv_obj_set_size(pc_, half ? width_ / 2 - gap_ / 2 : width_, key_h_);
     lv_obj_set_pos(pc_, 0, height_ - key_h_);
   }

@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.4
+version: 0.1.5
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
