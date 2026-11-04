@@ -15,7 +15,7 @@ Claude Code session C ─┘            │
                    Tessera screen: plugin claude_sessions (tile, cards, popup, top bar item)
 ```
 
-- **The mod** sees exactly one session: the engine runs one session per process (`$.session.id()`; after `/clear`
+- **The mod** sees exactly one session (in bypassPermissions a question the app answers by itself within 10 s is never reported): the engine runs one session per process (`$.session.id()`; after `/clear`
   or a resume it goes on under another id), and its hooks run in every session that loads the plugin, whether that
   session is selected in the Desktop app or not. There is no API to see other sessions from a mod, so every session
   reports itself and nothing else. Nothing in the mod is shared with another session: the state is keyed by session
@@ -122,7 +122,7 @@ player in the integration's options the same moments play a chime and the spoken
 | `idle` | between turns |
 | `working` | `turn.start` until `turn.complete` |
 | `asking` | an AskUserQuestion call is open |
-| `permission` | a permission ask stayed open longer than the hint delay (default 8 s); `detail` says which call |
+| `permission` | a permission prompt to the person stayed open longer than the hint delay (default 8 s); `detail` says which call. An ask the classifier answers (auto mode) or nobody is asked about (bypassPermissions, dontAsk) never is one: the mod reads the mode from the classic hooks and, in auto mode, waits for the PermissionRequest that hands a call to the person |
 | `lost` | no report for 45 s (the PC sleeps, the network is away); forgotten after 10 min |
 | `ended` | `session.end`; gone after a minute |
 

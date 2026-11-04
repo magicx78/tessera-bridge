@@ -1,6 +1,6 @@
 {
   "name": "tessera-bridge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Reports every Claude session (state, context, the account's limits, open questions) to the tessera_claude integration in Home Assistant, so Tessera screens show them all and answer questions",
   "author": {
     "name": "magicx78"
@@ -45,7 +45,7 @@
     "hintDelay": {
       "type": "string",
       "title": "Permission hint delay",
-      "description": "Seconds a permission ask has to stay open before the screen shows a hint. In the app's auto mode every call is reported as an ask first and most settle by themselves, so a longer delay (10 to 15) avoids false hints there.",
+      "description": "Seconds a permission prompt has to stay open before the screen shows a hint. In auto mode the delay starts once the classifier hands a call to you; in bypass mode nothing is a hint.",
       "default": "8"
     }
   }

@@ -7,6 +7,13 @@ import { nonce, toToolAnswers, type ToolAnswers } from './questions'
 import { Bridge, type SessionBridge } from './session'
 
 /**
+ * In bypassPermissions the Desktop app answers an AskUserQuestion by itself after a few seconds. A question that is
+ * still open after this long is a real one (a terminal shows the dialog there) and goes to the screens; one answered
+ * before it was never announced.
+ */
+export const BYPASS_QUESTION_GRACE_MS = 10_000
+
+/**
  * tessera-bridge: this Claude session on the Tessera screens, through the tessera_claude integration in Home
  * Assistant. Every session that loads the mod reports itself (state, context, the account's limits, its open
  * questions) under its own id; the integration keeps the registry, the display plugin shows it and answers.
@@ -74,10 +81,25 @@ export const register: Register = (on, options) => {
     if (host) {
       const session = await bridge.session(host)
       session.working = true
+      await session.refreshName(host)
       session.touch()
     }
     return next(e)
   })
+
+  // The classic hooks name the session's permission mode (`default`, `auto`, `bypassPermissions`, ...); the bridge
+  // keeps the last word, so it knows whether anybody is asked at all.
+  const takeMode = async (mode: unknown) => {
+    if (host && typeof mode === 'string' && mode) (await bridge.session(host)).mode = mode
+  }
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await takeMode(e.permission_mode)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  on('classic.PostToolUse', async ($, e, next) => {
+    await takeMode(e.permission_mode)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const h = host
@@ -86,14 +108,25 @@ export const register: Register = (on, options) => {
     if (raw.length === 0) return next(e)
     const session = await bridge.session(h)
     const id = e.tool_use_id ?? `q-${nonce()}`
-    const question = await session.ask(h, id, raw)
-    if (!question) return next(e)
 
     // The dialog in the app runs beneath, in parallel with the display; the integration decides who was first.
     const desktop = next(e).then(
       result => ({ from: 'desktop' as const, result, error: undefined }),
       (error: unknown) => ({ from: 'desktop' as const, result: undefined, error }),
     )
+    const settle = async () => {
+      const late = await desktop
+      if (late.error !== undefined || late.result === undefined) throw late.error
+      return late.result
+    }
+    if (session.mode === 'bypassPermissions') {
+      // The app may answer by itself in a moment: such a question is nobody's, and the screens never hear of it.
+      const grace = new Promise<boolean>(resolve => h.after(BYPASS_QUESTION_GRACE_MS, () => resolve(false)))
+      if (await Promise.race([desktop.then(() => true), grace])) return settle()
+    }
+    const question = await session.ask(h, id, raw)
+    if (!question) return settle()
+
     const display = session.waitFor(id).then(status => ({ from: 'display' as const, status }))
     const first = await Promise.race([desktop, display])
 
@@ -105,9 +138,7 @@ export const register: Register = (on, options) => {
         return toolResult(e.questions, answers)
       }
       // Cancelled, or an answer that does not fit: the dialog in the app stands.
-      const late = await desktop
-      if (late.error !== undefined || late.result === undefined) throw late.error
-      return late.result
+      return settle()
     }
 
     // The app settled first: the PC's answer stands unless the display was quicker at the integration.
@@ -141,13 +172,30 @@ export const register: Register = (on, options) => {
       e.tool !== 'AskUserQuestion'
     ) {
       const session = await bridge.session(h)
-      // Not at once: in auto mode most asks settle by themselves in a moment.
+      // A hint only after the delay, and only for an ask a person sees: in `auto` the classifier answers most asks
+      // by itself, and the delay starts with the PermissionRequest that hands one to the person.
       session.askPermission(id, e.tool, e.input)
       h.after(cfg.hintDelayMs, () => {
         if (session.hintIfStillOpen(id)) void session.report(h)
       })
     }
     return verdict
+  }).catch(($, e, next) => next(e))
+
+  // The engine is about to ask a person about a call: from now on its ask is a prompt, and a hint after the delay.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const h = host
+    if (h) {
+      await takeMode(e.permission_mode)
+      const session = await bridge.session(h)
+      const id = session.prompted(e.tool_name, e.tool_input)
+      if (id !== null) {
+        h.after(cfg.hintDelayMs, () => {
+          if (session.hintIfStillOpen(id)) void session.report(h)
+        })
+      }
+    }
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   // Once a tool ran (or was refused) the person has answered on the PC: the hint of that call goes. A call that

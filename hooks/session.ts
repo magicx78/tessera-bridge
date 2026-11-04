@@ -38,7 +38,25 @@ export type ClaimReply = {
 export const HEARTBEAT_MS = 15_000
 export const POLL_MS = 1_500
 
-type PendingAsk = { tool: string; detail: string; hinted: boolean }
+/**
+ * A tool call whose permission ask is open: what it is about, the input as a key (a PermissionRequest names the call
+ * by tool and input, not by id), whether a person was asked (`prompted`), and whether it is a hint by now.
+ */
+type PendingAsk = { tool: string; inputKey: string; detail: string; prompted: boolean; hinted: boolean }
+
+/**
+ * The modes in which nobody is asked: the engine answers every ask itself (bypassPermissions) or refuses it
+ * (dontAsk). In `auto` the classifier answers, and only an ask it hands to the person (a PermissionRequest) is one.
+ */
+const NOBODY_ASKED = new Set(['bypassPermissions', 'dontAsk'])
+
+export function inputKey(input: unknown): string {
+  try {
+    return JSON.stringify(input ?? null)
+  } catch {
+    return ''
+  }
+}
 
 /** A background task of the session, and when it started, in the host clock's milliseconds. */
 type BackgroundTask = { kind: BackgroundKind; title: string; startedAt: number }
@@ -55,6 +73,8 @@ export class SessionBridge {
   name = ''
   model = ''
   cwd = ''
+  /** The session's permission mode as the classic hooks last named it (`default`, `auto`, ...); "" while unknown. */
+  mode = ''
   working = false
   context: ContextUsage | null = null
   limits: SessionRateLimit[] = []
@@ -209,6 +229,18 @@ export class SessionBridge {
     }
   }
 
+  /**
+   * The session's name follows its folder: a session the app starts in a spare folder and moves into the project
+   * afterwards would keep the spare's name otherwise. A configured session name stands.
+   */
+  async refreshName(host: Host) {
+    const cwd = await quietly(host, () => host.cwd())
+    if (cwd === undefined || cwd === this.cwd) return
+    this.cwd = cwd
+    if (!this.cfg.sessionName) this.name = baseName(cwd) || this.name
+    this.touch()
+  }
+
   /** Takes a question out of the report (it was answered or cancelled) and wakes whoever waits for it. */
   settleQuestion(id: string, status: QuestionStatus) {
     this.questions.delete(id)
@@ -226,15 +258,58 @@ export class SessionBridge {
     this.touch()
   }
 
-  /** A permission ask opened; it becomes a hint when it is still open after the delay. */
-  askPermission(toolUseId: string, tool: string, input: unknown) {
-    this.pendingAsks.set(toolUseId, { tool, detail: describeCall(tool, input), hinted: false })
+  /** True when a person answers this session's asks at all: in bypassPermissions and dontAsk nobody is asked. */
+  get asksAPerson(): boolean {
+    return !NOBODY_ASKED.has(this.mode)
   }
 
-  /** True when the ask was still open and is a hint from now on. */
+  /**
+   * True when an ask of this session is put to a person without a PermissionRequest saying so: in `auto` the
+   * classifier answers most asks by itself and the engine raises a PermissionRequest for the rest, so there an ask is
+   * only a hint once that came; in every other mode the dialog opens for every ask.
+   */
+  get askIsPrompt(): boolean {
+    return this.asksAPerson && this.mode !== 'auto'
+  }
+
+  /** A permission ask opened; it becomes a hint when it is still open after the delay. */
+  askPermission(toolUseId: string, tool: string, input: unknown) {
+    this.pendingAsks.set(toolUseId, {
+      tool,
+      inputKey: inputKey(input),
+      detail: describeCall(tool, input),
+      prompted: this.askIsPrompt,
+      hinted: false,
+    })
+  }
+
+  /**
+   * The engine is about to ask a person about a call (a PermissionRequest names it by tool and input): the ask of
+   * that call is a prompt from now on. Returns its id, or null when no open ask fits (the input was rewritten on the
+   * way, or the ask was settled already).
+   */
+  prompted(tool: string, input: unknown): string | null {
+    const key = inputKey(input)
+    let fallback: string | null = null
+    for (const [id, ask] of this.pendingAsks) {
+      if (ask.prompted || ask.tool !== tool) continue
+      if (ask.inputKey === key) {
+        ask.prompted = true
+        return id
+      }
+      fallback = id
+    }
+    if (fallback !== null) {
+      const ask = this.pendingAsks.get(fallback)
+      if (ask) ask.prompted = true
+    }
+    return fallback
+  }
+
+  /** True when the ask was still open, put to a person, and is a hint from now on. */
   hintIfStillOpen(toolUseId: string): boolean {
     const ask = this.pendingAsks.get(toolUseId)
-    if (!ask || ask.hinted) return false
+    if (!ask || ask.hinted || !ask.prompted || !this.asksAPerson) return false
     ask.hinted = true
     this.touch()
     return true

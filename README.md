@@ -110,7 +110,7 @@ Danach die Optionen setzen, unter `/plugin` → Installed → tessera-bridge:
 | `instanceName` | Name dieses Rechners in der Sessions-Liste | leer |
 | `sessionName` | Name für die Sessions dieser Installation. Bleibt er leer, wird der Projektordner genommen. | leer |
 | `permissionHints` | `on`: wartende Freigaben werden am Screen als Hinweis gezeigt | `on` |
-| `hintDelay` | So viele Sekunden muss eine Freigabe offen sein, bevor der Hinweis kommt. Im Auto-Modus der App sind 10–15 sinnvoll. | `8` |
+| `hintDelay` | So viele Sekunden muss eine Freigabe-Anfrage am PC offen sein, bevor der Hinweis kommt. | `8` |
 
 In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden.
 
@@ -177,6 +177,8 @@ War der PC schneller, meldet der Mod das bei der Integration an. Kam der Screen 
 
 - **Freitext** tippt man nicht am Screen. Bei so einer Frage zeigt der Screen nur die Auswahl, und **Am PC** gibt sie an den Rechner ab.
 - **Freigaben** wie „Darf ich diesen Befehl ausführen?“ werden nie am Screen beantwortet. Das Popup ist nur ein Hinweis.
+- **Auto-Modus und „Berechtigungen umgehen“:** Im Auto-Modus beantwortet der Klassifizierer die meisten Anfragen selbst; ein Hinweis kommt erst, wenn er eine Anfrage an dich weitergibt. Mit umgangenen Berechtigungen fragt niemand, also gibt es keinen Hinweis, und eine Auswahlfrage, die die App nach ein paar Sekunden selbst beantwortet, wird nicht angesagt. Bleibt sie länger als zehn Sekunden offen, kommt sie auf den Screen.
+- **Sessionname:** Bleibt `sessionName` leer, heißt die Session wie ihr Projektordner, auch wenn die Desktop-App sie in einem Ersatzordner gestartet und erst danach ins Projekt gesetzt hat.
 - **„getrennt“** steht bei einer Session, deren Mod nicht mehr meldet, etwa weil der PC schläft oder das Netz weg ist. Nach zehn Minuten verschwindet sie.
 - **Limits** gehören dem Konto. Sie gelten für alle Sessions gleich und werden nie zusammengezählt. Es zählt der Wert der Session, die zuletzt gemessen hat.
 - **Textlängen** sind durch den Transport begrenzt: höchstens sechs Zeilen mit je 48 Bytes. Lange Optionsbeschreibungen werden gekürzt.

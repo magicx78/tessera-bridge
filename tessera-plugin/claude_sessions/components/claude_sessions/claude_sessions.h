@@ -97,6 +97,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   void on_cards_closed() override;
 
   void set_event(text_sensor::TextSensor *s) { event_ = s; }
+  void set_event_rev(text_sensor::TextSensor *s) { event_rev_ = s; }
   void set_open(text_sensor::TextSensor *s) { open_ = s; }
   void set_rev(text_sensor::TextSensor *s) { rev_ = s; }
   void set_question_popup(switch_::Switch *s) { question_popup_ = s; }
@@ -136,13 +137,17 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   tessera::BarItem bar() const;
   uint32_t ask(const char *service, JsonDocument &data);
 
-  text_sensor::TextSensor *event_{}, *open_{}, *rev_{};
+  text_sensor::TextSensor *event_{}, *event_rev_{}, *open_{}, *rev_{};
   switch_::Switch *question_popup_{}, *hint_popup_{};
   Overview overview_;
   Question question_;
   PopupView popup_;
   char pending_question_[12] = "";
-  tessera::Text seen_event_, seen_rev_;
+  tessera::Text seen_event_, seen_event_rev_, seen_rev_;
+  bool event_seen_ = false, event_rev_seen_ = false;
+  // When the event was last handled, by the screen's clock: the event and its counter arrive as two values, and the
+  // second of a pair is no second event.
+  uint32_t event_handled_ms_ = 0;
   bool first_rev_ = true;
   uint32_t asked_overview_ = 0, asked_question_ = 0, asked_hint_ = 0, asked_answer_ = 0;
   uint32_t last_overview_ms_ = 0;

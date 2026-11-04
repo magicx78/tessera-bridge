@@ -36,6 +36,9 @@ static constexpr uint32_t OVERVIEW_SPACING_MS = 1500;
 // A question or hint request without a reply is repeated after this long, this many times in all.
 static constexpr uint32_t EVENT_RETRY_MS = 10000;
 static constexpr uint8_t EVENT_RETRIES = 6;
+// The event's text and its counter arrive one after the other; a counter that moves this soon after the text is
+// the same event, later it is a new one with the same text (a second hint of the same session).
+static constexpr uint32_t EVENT_PAIR_MS = 3000;
 
 // ---- Small helpers ----
 
@@ -2085,10 +2088,24 @@ void ClaudeSessions::send_event_request() {
 }
 
 void ClaudeSessions::on_interval(uint32_t now_ms) {
+  bool fresh = false;
   if (event_ && event_->has_state() && !roomy::same(event_->state, seen_event_)) {
     seen_event_ = roomy::text(event_->state);
+    event_seen_ = true;
     // The first value after a start is handled too: a question asked while the screen was off or away is still
     // open, and the registry's reply decides (a popup only for an open question, for a hint still waiting).
+    fresh = true;
+  }
+  if (event_rev_ && event_rev_->has_state() && !roomy::same(event_rev_->state, seen_event_rev_)) {
+    // The counter moves with every event, the text only with a new handle: a second hint of the same session keeps
+    // the text, and the counter alone says it is new. The first counter after a start says nothing the text did not.
+    const bool first = !event_rev_seen_;
+    seen_event_rev_ = roomy::text(event_rev_->state);
+    event_rev_seen_ = true;
+    if (!first && !fresh && now_ms - event_handled_ms_ >= EVENT_PAIR_MS) fresh = true;
+  }
+  if (fresh && event_seen_) {
+    event_handled_ms_ = now_ms;
     handle_event(roomy::plain(seen_event_));
   }
   // A request the app did not answer (sent while the screen still waited for the app after a start, or lost with

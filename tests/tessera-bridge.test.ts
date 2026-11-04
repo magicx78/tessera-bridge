@@ -26,6 +26,7 @@ function mockHa(on: Parameters<TestBody>[1]) {
     questions: {} as Record<string, Status>,
     claim: { accepted: true } as Record<string, unknown>,
     down: false,
+    cwd: '/home/me/projects/garden',
     reports: () => calls.filter(c => c.path === '/api/tessera_claude/v1/report').map(c => c.body),
     lastReport: () => {
       const all = ha.reports()
@@ -54,7 +55,7 @@ function mockHa(on: Parameters<TestBody>[1]) {
   on('ui.log', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'session-aaaa' }))
-  on('session.cwd', () => ({ value: '/home/me/projects/garden' }))
+  on('session.cwd', () => ({ value: ha.cwd }))
   on('session.model', () => ({ value: 'claude' }))
   on('session.usage', () => ({ value: { context: { window: 1_000_000, tokens: 50_000, percent: 5 }, rateLimits: [] } }))
   mock.store(on, {})
@@ -340,4 +341,108 @@ test('a background shell is reported with its age until TaskStop ends it', { opt
   await $.tool.call({ tool: 'TaskStop', task_id: 'bg1', tool_use_id: 't10' })
   await clock.advance(2_000)
   expect(ha.lastReport()?.tasks).toEqual([])
+})
+
+/** The classic hooks' bottoms, and the session's permission mode as the next prompt names it. */
+function classic(on: Parameters<TestBody>[1]) {
+  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.PermissionRequest', () => ({}))
+  on('classic.PostToolUse', () => ({}))
+}
+
+test('in auto mode an ask is a hint only once the engine asks a person (a PermissionRequest)', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.check', () => ({ decision: 'ask', reason: 'mode' }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+
+  await start($)
+  await $.classic.UserPromptSubmit({ prompt: 'build it', permission_mode: 'auto' })
+  await $.tool.check({ tool: 'Bash', input: { command: 'esphome run screen.yaml' }, tool_use_id: 't3' })
+  // The classifier takes its time, or the call runs long: no person is asked, so nothing is a hint.
+  await clock.advance(30_000)
+  expect(ha.reports().some(r => r.state === 'permission')).toBe(false)
+
+  // The classifier hands the call to the person: a hint after the delay.
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'esphome run screen.yaml' }, permission_mode: 'auto' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.state).not.toBe('permission')
+  await clock.advance(4_000)
+  expect(ha.lastReport()?.state).toBe('permission')
+  expect(String(ha.lastReport()?.detail).startsWith('Bash: esphome run screen.yaml')).toBe(true)
+
+  await $.tool.call({ tool: 'Bash', command: 'esphome run screen.yaml', tool_use_id: 't3' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.state).toBe('idle')
+})
+
+test('in bypassPermissions nothing waits for a person: no ask is a hint', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.check', () => ({ decision: 'ask', reason: 'mode' }))
+
+  await start($)
+  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'bypassPermissions' })
+  await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 't4' })
+  await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, permission_mode: 'bypassPermissions' })
+  await clock.advance(30_000)
+  expect(ha.reports().some(r => r.state === 'permission')).toBe(false)
+})
+
+test('in bypassPermissions a question the app answers by itself is never reported', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  let answer: ((value: unknown) => void) | null = null
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
+
+  await start($)
+  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'bypassPermissions' })
+  const call = $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q8' })
+  await clock.advance(4_000)
+  answer!({ result: { questions: [], answers: { 'Weiter machen?': '[No preference]' } } })
+  const result = (await call) as Answered
+  expect(result.result?.answers).toEqual({ 'Weiter machen?': '[No preference]' })
+  await clock.advance(2_000)
+  expect(ha.reports().some(r => r.state === 'asking' || (r.questions as unknown[]).length > 0)).toBe(false)
+  expect(ha.calls.some(c => c.path.endsWith('/claim'))).toBe(false)
+})
+
+test('in bypassPermissions a question that stays open goes to the screens after the grace', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(() => {}))
+
+  await start($)
+  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'bypassPermissions' })
+  const call = $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q9' })
+  await clock.advance(8_000)
+  expect(ha.reports().some(r => r.state === 'asking')).toBe(false)
+  await clock.advance(4_000)
+  expect(ha.lastReport()?.state).toBe('asking')
+  const questions = ha.lastReport()?.questions as Array<{ id: string; nonce: string }>
+  expect(questions[0]?.id).toBe('toolu_q9')
+
+  ha.questions['toolu_q9'] = { status: 'answered', by: 'display', answer: { p0: ['o0'] }, nonce: questions[0]!.nonce }
+  await clock.advance(2_000)
+  const result = (await call) as Answered
+  expect(result.result?.answers).toEqual({ 'Weiter machen?': 'Ja' })
+})
+
+test('the session takes the name of the folder it moved into', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  ha.cwd = 'C:\\Users\\me\\.claude\\spares\\spare-4YmsPh'
+
+  await start($)
+  expect(ha.lastReport()?.name).toBe('spare-4YmsPh')
+  ha.cwd = 'C:\\Users\\me\\projects\\garden'
+  await $.turn.start({ text: 'hi', turnId: 'turn-2' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.name).toBe('garden')
+  expect(ha.lastReport()?.cwd).toBe('C:\\Users\\me\\projects\\garden')
 })
