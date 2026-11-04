@@ -29,6 +29,10 @@ struct Overview {
   int open = 0;            // questions open
   int l5h = -1, lwk = -1;  // the account's windows, percent used, -1 unknown
   uint32_t l5h_at = 0, lwk_at = 0;
+  // Sessions working, asking or waiting for approval; since when the oldest of them is active (epoch, 0 none); when
+  // the last activity was (epoch, 0 none).
+  int active = 0;
+  uint32_t active_since = 0, last_active = 0;
   bool valid = false;      // something was ever received
   uint32_t at = 0;         // when, by the screen's clock
 };

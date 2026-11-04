@@ -259,6 +259,53 @@ def test_a_stale_rev_is_refused():
 
 
 
+def test_active_since_is_the_oldest_unbroken_activity_and_last_active_stays_after_it():
+    r = Registry()
+    snap = r.snapshot(0)
+    assert snap["active"] == 0 and snap["active_since"] == 0 and snap["last_active"] == 0
+    r.report(report("pc1", "a", 1, "A", "idle"), now=10)
+    assert r.snapshot(10)["active_since"] == 0
+    # A starts working at 20, B at 30: the activity runs since A's start.
+    r.report(report("pc1", "a", 2, "A", "working"), now=20)
+    r.report(report("pc1", "b", 1, "B", "working"), now=30)
+    # Working, then asking, then waiting for approval is one unbroken activity: the start stays.
+    r.report(report("pc1", "a", 3, "A", "asking", [question("toolu_1")]), now=40)
+    # The first open question of each row, for a tap that opens it.
+    snap = r.snapshot(40)
+    assert snap["q"][snap["names"].index("A")] == r.open_questions(r.sessions["pc1.a"])[0].handle
+    assert snap["q"][snap["names"].index("B")] == ""
+    r.report(report("pc1", "a", 4, "A", "permission"), now=50)
+    snap = r.snapshot(50)
+    assert snap["active"] == 2 and snap["active_since"] == 20 and snap["last_active"] == 50
+    # A goes idle at 60: B's start stands.
+    r.report(report("pc1", "a", 5, "A", "idle"), now=60)
+    snap = r.snapshot(60)
+    assert snap["active"] == 1 and snap["active_since"] == 30
+    # B goes idle at 70: nothing is active, the last activity was at 70.
+    r.report(report("pc1", "b", 2, "B", "idle"), now=70)
+    snap = r.snapshot(80)
+    assert snap["active"] == 0 and snap["active_since"] == 0 and snap["last_active"] == 70
+    # A works again: a new start, not the old one.
+    r.report(report("pc1", "a", 6, "A", "working"), now=90)
+    assert r.snapshot(90)["active_since"] == 90
+
+
+def test_a_lost_or_ended_session_is_not_active_and_the_last_activity_outlives_it():
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working"), now=5)
+    # The bridge goes quiet: the session is lost, not active; its last word counts as its last activity.
+    snap = r.snapshot(LOST_AFTER + 6)
+    assert snap["active"] == 0 and snap["active_since"] == 0 and snap["last_active"] == 5
+    r.report(report("pc1", "b", 1, "B", "working"), now=100)
+    r.end({"instance": "pc1", "session": "b"}, now=110)
+    snap = r.snapshot(111)
+    assert snap["active"] == 0 and snap["last_active"] == 110
+    # Both sessions are forgotten: the time of the last activity stays.
+    r.prune(now=FORGET_AFTER + 200)
+    assert r.sessions == {}
+    assert r.snapshot(FORGET_AFTER + 200)["last_active"] == 110
+
+
 def test_lines_stay_under_the_screens_48_bytes():
     from registry import wrap_lines
 

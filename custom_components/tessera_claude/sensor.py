@@ -121,8 +121,13 @@ class SessionsSensor(ClaudeSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        snap = self.registry.snapshot(time.monotonic())
+        now = time.monotonic()
+        snap = self.registry.snapshot(now)
         snap.pop("count", None)
+        # The registry runs on the monotonic clock; the screen counts in epoch seconds.
+        wall = time.time()
+        for key in ("active_since", "last_active"):
+            snap[key] = int(wall - (now - snap[key])) if snap[key] else 0
         kinds = self.limits().get("kinds", {})
         five = kinds.get("five_hour", {})
         week = kinds.get("seven_day", {})

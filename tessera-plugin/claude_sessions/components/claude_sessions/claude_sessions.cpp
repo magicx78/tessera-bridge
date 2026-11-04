@@ -110,6 +110,25 @@ static bool inside(lv_obj_t *obj, lv_obj_t *room, const tessera::Point &p) {
   return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
 }
 
+// Working, asking or waiting for approval: what the activity tile counts (the registry's ACTIVE_STATES).
+static bool is_active(const char *state) {
+  return !std::strcmp(state, "work") || !std::strcmp(state, "ask") || !std::strcmp(state, "perm");
+}
+
+// "12 min", "2 h 05 min", "3 d 4 h": a span of seconds, as the activity tile writes it.
+static std::string span_word(const tessera::Plugin *plugin, uint32_t seconds) {
+  if (seconds < 60) return plugin->text("span_now");
+  const uint32_t minutes = seconds / 60;
+  if (minutes < 60) return tessera::format(plugin->text("span_min"), static_cast<int>(minutes));
+  if (minutes < 24 * 60) {
+    char mins[4];
+    std::snprintf(mins, sizeof(mins), "%02u", (unsigned) (minutes % 60));
+    return tessera::fill(tessera::fill(plugin->text("span_hm"), "a", std::to_string(minutes / 60)).c_str(), "b", mins);
+  }
+  return tessera::fill(tessera::fill(plugin->text("span_dh"), "a", std::to_string(minutes / 1440)).c_str(), "b",
+                       std::to_string((minutes % 1440) / 60));
+}
+
 // ---- Parsing what Home Assistant sends ----
 
 static void parse_limits(Overview &o, JsonObjectConst kinds) {
@@ -125,7 +144,7 @@ void ClaudeSessions::take_tile_data(JsonObjectConst data) {
   if (a.isNull()) return;
   Overview &o = overview_;
   o.rows.clear();
-  JsonArrayConst h = a["h"], names = a["names"], states = a["states"], ctx = a["ctx"], asks = a["asks"];
+  JsonArrayConst h = a["h"], names = a["names"], states = a["states"], ctx = a["ctx"], asks = a["asks"], q = a["q"];
   const size_t n = h.size();
   for (size_t i = 0; i < n; ++i) {
     SessionRow row;
@@ -134,6 +153,7 @@ void ClaudeSessions::take_tile_data(JsonObjectConst data) {
     copy(row.state, i < states.size() ? (states[i] | "idle") : "idle");
     row.ctx = i < ctx.size() ? (ctx[i] | -1) : -1;
     row.asks = i < asks.size() ? (asks[i] | 0) : 0;
+    copy(row.q, i < q.size() ? (q[i] | "") : "");
     o.rows.push_back(row);
   }
   o.count = std::atoi(data["state"] | "0");
@@ -142,6 +162,9 @@ void ClaudeSessions::take_tile_data(JsonObjectConst data) {
   o.lwk = a["lwk"] | -1;
   o.l5h_at = a["l5h_at"] | 0u;
   o.lwk_at = a["lwk_at"] | 0u;
+  o.active = a["active"] | 0;
+  o.active_since = a["active_since"] | 0u;
+  o.last_active = a["last_active"] | 0u;
   o.valid = true;
   o.at = tessera::epoch();
   ESP_LOGD(TAG, "Tile data: %d sessions, %d open, rev %d, limits 5h %d%% week %d%%", o.count, o.open,
@@ -166,6 +189,8 @@ static void parse_overview(Overview &o, JsonObjectConst result) {
   }
   o.count = static_cast<int>(o.rows.size());
   o.open = open;
+  o.active = static_cast<int>(
+      std::count_if(o.rows.begin(), o.rows.end(), [](const SessionRow &r) { return is_active(r.state); }));
   parse_limits(o, result["limits"]["kinds"]);
   o.valid = true;
   o.at = tessera::epoch();
@@ -371,6 +396,234 @@ class OverviewTile : public tessera::Tile {
   int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0;
   bool has_entity_ = false;
   lv_obj_t *title_{}, *badge_{}, *badge_text_{}, *big_{}, *sub_{}, *limits_{};
+  lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
+};
+
+// ---- The activity tile: whether Claude is at work, since when, in how many sessions, and whether one asks ----
+
+class ActivityTile : public tessera::Tile {
+ public:
+  explicit ActivityTile(ClaudeSessions *plugin) : plugin_(plugin) {}
+
+  void create(const tessera::TileContext &c) override {
+    width_ = c.width;
+    height_ = c.height;
+    columns_ = c.columns;
+    rows_ = c.rows;
+    entity_ = c.entity ? c.entity : "";
+    tile_ = c.tile;
+    name_ = c.name && *c.name ? c.name : plugin_->text("activity_title");
+    const bool large = ui::large();
+    gap_ = ui::px(large ? 6 : 4);
+    // The head: the icon, the name, and at the right the badge with the open questions.
+    icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
+    title_ = ui::label(c.parent, Font::TITLE, theme::INK);
+    badge_h_ = ui::line_height(Font::BODY) + ui::px(large ? 6 : 4);
+    badge_ = ui::block(c.parent, theme::ACCENT);
+    lv_obj_set_style_radius(badge_, LV_RADIUS_CIRCLE, 0);
+    badge_text_ = ui::label(badge_, Font::BODY, theme::ON_ACCENT);
+    lv_obj_set_style_text_align(badge_text_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(badge_text_);
+    head_ = std::max({ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL), badge_h_});
+    big_ = ui::label(c.parent, Font::VALUE, theme::INK);
+    since_ = ui::label(c.parent, Font::BODY_LARGE, theme::INK);
+    of_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    for (int i = 0; i < MAX_TILE_ROWS; ++i) {
+      row_name_[i] = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
+      row_state_[i] = ui::label(c.parent, Font::BODY, theme::MUTED);
+      lv_obj_set_style_text_align(row_state_[i], LV_TEXT_ALIGN_RIGHT, 0);
+    }
+  }
+
+  void on_state(JsonObjectConst data) override {
+    wait_ = data["wait"] | "";
+    const bool has = !data["state"].isNull();
+    if (has) plugin_->take_tile_data(data);
+    has_entity_ = has;
+    paint(tessera::epoch());
+  }
+
+  // Every second: the duration counts on.
+  void on_tick(uint32_t epoch) override { paint(epoch); }
+
+  void on_theme() override {
+    ui::set_color(title_, theme::INK);
+    for (int i = 0; i < MAX_TILE_ROWS; ++i) ui::set_color(row_name_[i], theme::INK_SOFT);
+    paint(tessera::epoch());
+  }
+
+  // A question waits: straight to it. Otherwise the sessions card.
+  void on_tap() override {
+    const Overview &o = plugin_->overview();
+    if (o.valid && o.open > 0) {
+      for (const SessionRow &row : o.rows) {
+        if (row.q[0]) {
+          plugin_->open_question(row.q);
+          return;
+        }
+      }
+    }
+    tessera::open_card(plugin_->plugin_id(), "sessions", roomy::plain(entity_), tile_);
+  }
+
+ private:
+  void paint(uint32_t epoch) {
+    const Overview &o = plugin_->overview();
+    ui::set_text(title_, roomy::plain(name_));
+    const bool ready = has_entity_ && o.valid;
+    bool waits = false;
+    for (const SessionRow &row : o.rows) waits = waits || !std::strcmp(row.state, "perm");
+    const bool asks = ready && o.open > 0;
+    const bool busy = ready && o.active > 0;
+    waits = waits && busy;
+    // Red while a question waits, amber while an approval waits at the PC, the accent while it works, muted at rest.
+    const Tone tone = asks ? Tone::ALERT : waits ? Tone::BUSY : busy ? Tone::ACCENT : Tone::NORMAL;
+    ui::set_text(icon_, ui::icon(asks ? ICON_ROBOT_ASKS : waits ? ICON_LOCK : ICON_ROBOT));
+    ui::set_tone(icon_, tone, theme::MUTED);
+
+    hide(badge_, !asks);
+    if (asks) {
+      const std::string count = std::to_string(o.open);
+      const int w = std::max(badge_h_, ui::text_width(count, Font::BODY) + ui::px(10));
+      lv_obj_set_size(badge_, w, badge_h_);
+      lv_obj_set_pos(badge_, width_ - w, (head_ - badge_h_) / 2);
+      ui::set_fill(badge_, Tone::ALERT, theme::ACCENT);
+      ui::set_text(badge_text_, count);
+    }
+    const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
+    lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
+    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
+    lv_obj_set_width(title_, std::max(1, width_ - icon_w - (asks ? badge_h_ * 2 : 0)));
+
+    for (int i = 0; i < MAX_TILE_ROWS; ++i) {
+      hide(row_name_[i], true);
+      hide(row_state_[i], true);
+    }
+    const int body_h = ui::line_height(Font::BODY);
+    if (!ready) {
+      // Nothing to show yet: say what to do.
+      hide(big_, true);
+      hide(since_, true);
+      hide(of_, false);
+      lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
+      lv_obj_set_size(of_, width_, body_h);
+      lv_obj_set_pos(of_, 0, head_ + gap_);
+      ui::set_color(of_, theme::MUTED);
+      ui::set_text(of_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
+      return;
+    }
+
+    // The words: since when it works (or when it last did), and of how many sessions.
+    std::string since;
+    if (asks) {
+      since = plugin_->text("activity_asks");
+    } else if (waits) {
+      since = plugin_->text("activity_waits");
+    } else if (busy) {
+      since = epoch && o.active_since && epoch >= o.active_since
+                  ? tessera::fill(plugin_->text("active_for"), "n", span_word(plugin_, epoch - o.active_since))
+                  : plugin_->text("activity_on");
+    } else if (o.count > 0 && epoch && o.last_active && epoch >= o.last_active) {
+      since = tessera::fill(plugin_->text("last_active"), "n", span_word(plugin_, epoch - o.last_active));
+    } else {
+      since = plugin_->text("activity_rest");
+    }
+    const std::string of = o.count > 0 ? tessera::format(plugin_->text("of_sessions"), o.count) : plugin_->text("none");
+    const Tone word_tone = asks ? Tone::ALERT : waits ? Tone::BUSY : Tone::NORMAL;
+
+    // The big number: how many sessions are active. On a tile two rows high the number and the words take the first
+    // row, the active sessions' names the rest.
+    const std::string big = std::to_string(o.active);
+    const bool wide = columns_ >= 2;
+    const int top_room = rows_ >= 2 ? std::max(2 * body_h, height_ / rows_ - head_) : height_ - head_;
+    const int number_w = wide ? width_ * 2 / 5 : width_;
+    const int under = wide ? 0 : body_h;
+    Font face = Font::BODY_LARGE;
+    for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
+      face = f;
+      if (f == Font::DIGITS && !ui::covers(big, f)) continue;
+      if (ui::text_width(big, f) <= number_w && ui::line_height(f) + under <= top_room) break;
+    }
+    const int big_h = ui::line_height(face);
+    hide(big_, false);
+    ui::set_font(big_, face);
+    ui::set_text(big_, big);
+    ui::set_tone(big_, tone, busy ? theme::INK : theme::MUTED);
+    hide(of_, false);
+
+    int bottom;
+    if (wide) {
+      // Beside the number: the time on the first line, "of N sessions" under it.
+      const int body_large_h = ui::line_height(Font::BODY_LARGE);
+      const int text_x = std::min(width_ - 1, ui::text_width(big, face) + ui::px(12));
+      const int text_w = std::max(1, width_ - text_x);
+      const int words_h = body_large_h + body_h;
+      const int block_h = std::max(big_h, words_h);
+      const int top = head_ + std::max(0, (top_room - block_h) / 2);
+      lv_obj_set_size(big_, text_x, big_h);
+      lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_LEFT, 0);
+      lv_obj_set_pos(big_, 0, top + (block_h - big_h) / 2);
+      hide(since_, false);
+      lv_obj_set_size(since_, text_w, body_large_h);
+      lv_obj_set_pos(since_, text_x, top + (block_h - words_h) / 2);
+      ui::set_text(since_, since);
+      ui::set_tone(since_, word_tone, busy ? theme::INK : theme::MUTED);
+      lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
+      lv_obj_set_size(of_, text_w, body_h);
+      lv_obj_set_pos(of_, text_x, top + (block_h - words_h) / 2 + body_large_h);
+      ui::set_text(of_, of);
+      ui::set_color(of_, theme::MUTED);
+      bottom = top + block_h + gap_;
+    } else {
+      // Under the number: one word of state.
+      const int top = head_ + std::max(0, (top_room - big_h - body_h) / 2);
+      lv_obj_set_size(big_, width_, big_h);
+      lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_pos(big_, 0, top);
+      hide(since_, true);
+      lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_size(of_, width_, body_h);
+      lv_obj_set_pos(of_, 0, top + big_h);
+      ui::set_text(of_, asks || waits ? since
+                        : busy        ? plugin_->text("activity_on")
+                        : o.count > 0 ? plugin_->text("activity_rest")
+                                      : plugin_->text("none"));
+      ui::set_tone(of_, word_tone, theme::MUTED);
+      bottom = top + big_h + body_h + gap_;
+    }
+
+    // Two rows high or more: the names of the active sessions.
+    if (rows_ < 2) return;
+    const int step = body_h + gap_ / 2;
+    int y = bottom, shown = 0;
+    for (const SessionRow &row : o.rows) {
+      if (shown >= MAX_TILE_ROWS || y + body_h > height_) break;
+      if (!is_active(row.state)) continue;
+      const std::string state = state_word(plugin_, row.state);
+      const int state_w = std::min(width_ / 2, ui::text_width(state, Font::BODY) + ui::px(4));
+      lv_obj_t *name = row_name_[shown], *word = row_state_[shown];
+      hide(name, false);
+      hide(word, false);
+      lv_obj_set_size(word, state_w, body_h);
+      lv_obj_set_pos(word, width_ - state_w, y);
+      ui::set_text(word, state);
+      const Tone row_tone = !std::strcmp(row.state, "ask")    ? Tone::ALERT
+                            : !std::strcmp(row.state, "perm") ? Tone::BUSY
+                                                              : Tone::NORMAL;
+      ui::set_tone(word, row_tone, theme::MUTED);
+      lv_obj_set_size(name, std::max(1, width_ - state_w - ui::px(6)), body_h);
+      lv_obj_set_pos(name, 0, y);
+      ui::set_text(name, row.name);
+      y += step;
+      shown += 1;
+    }
+  }
+
+  ClaudeSessions *plugin_;
+  tessera::Text entity_, name_, wait_;
+  int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0;
+  bool has_entity_ = false;
+  lv_obj_t *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{};
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
 };
 
@@ -965,6 +1218,7 @@ void ClaudeSessions::setup() {
     ESP_LOGD(TAG, "Overview tile created");
     return new OverviewTile(this);
   });
+  add_tile("activity", [this]() { return new ActivityTile(this); });
   add_card("sessions", [this]() { return new SessionsCard(this); });
   add_card("question", [this]() { return new QuestionCard(this); });
   add_bar_item("asks", [this]() { return bar(); });

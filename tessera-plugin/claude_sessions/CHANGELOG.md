@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6
+- A second tile, `activity` ("Claude active", 1x1 to 2x2): the number of sessions working, asking or waiting for approval, since when the oldest of them has been at it ("for 12 min") or, at rest, when the last one was ("last 1 h ago"), "of N sessions", and a badge with the open questions. The tile turns red while a question waits and amber while an approval waits at the PC; a tap opens the first open question, else the sessions card; on 2x2 it lists the active sessions. Needs the integration 0.2.3 (the sensor's new attributes `q`, `active`, `active_since`, `last_active`).
+- The overview tile takes `q` too, so both tiles on one screen fill the same data.
+
 ## 0.1.5
 - A single choice is marked by a tap and sent with the Send key (Next for a part before the last), as a multi-select already was: on the first hardware tests one tap answered the model before the person had read the question. The chosen option is lit in the accent on every part.
 

@@ -11,6 +11,13 @@ tiles:
   - tile: overview
     name: No sensor
     sizes: [1x1]
+  - tile: activity
+    entity: sensor.claude_sessions
+    sizes: [1x1, 2x1, 2x2]
+  - tile: activity
+    name: At rest
+    entity: sensor.claude_sessions_empty
+    sizes: [1x1, 2x1]
 
 states:
   sensor.claude_sessions:
@@ -24,6 +31,10 @@ states:
       states: [ask, perm, work]
       ctx: [37, 62, -1]
       asks: [2, 0, 0]
+      q: [qab7, "", ""]
+      active: 3
+      active_since: "{epoch-12m}"
+      last_active: "{epoch}"
       l5h: 44
       l5h_at: "{epoch+1h}"
       lwk: 12
@@ -41,6 +52,10 @@ states:
       states: []
       ctx: []
       asks: []
+      q: []
+      active: 0
+      active_since: 0
+      last_active: "{epoch-1h}"
       l5h: -1
       l5h_at: 0
       lwk: -1

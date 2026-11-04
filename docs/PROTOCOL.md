@@ -100,7 +100,7 @@ later one (a second display, a double tap, the PC) is refused with the reason.
 
 | Entity | State | Attributes |
 |---|---|---|
-| `sensor.claude_sessions` | sessions alive | `rev`, `event` (`question:qab7` / `hint:sab5`, changes with every new one), `event_rev`, `open`, and parallel lists of at most 12 sessions, asking ones first: `h`, `names` (≤24 chars), `states`, `ctx` (-1 unknown), `asks`; the limits `l5h`, `l5h_at` (epoch), `lwk`, `lwk_at`, `lx_names`, `lx` |
+| `sensor.claude_sessions` | sessions alive | `rev`, `event` (`question:qab7` / `hint:sab5`, changes with every new one), `event_rev`, `open`, and parallel lists of at most 12 sessions, asking ones first: `h`, `names` (≤24 chars), `states`, `ctx` (-1 unknown), `asks`, `q` (the first open question's handle, `""` for none); `active` (sessions working, asking or waiting for approval; a lost one is not), `active_since` (epoch since which the oldest of them is active without a break, 0 for none), `last_active` (epoch of the last activity, 0 for none); the limits `l5h`, `l5h_at` (epoch), `lwk`, `lwk_at`, `lx_names`, `lx` |
 | `sensor.claude_questions` | open questions | `questions` (handle, session, text), `event`, `event_rev` |
 | `sensor.claude_limit_5h`, `sensor.claude_limit_week` | percent used, `unknown` until reported | `resets_at`, `resets_in` |
 | `sensor.claude_5h_reset` | `1h 09m` | `resets_at` |

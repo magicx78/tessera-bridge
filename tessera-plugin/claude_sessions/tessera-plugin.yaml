@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.5
+version: 0.1.6
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
@@ -40,8 +40,22 @@ tiles:
     domains: [sensor]
     # The sessions sensor of the tessera_claude integration, by the lists it carries.
     has_attributes: [h, states]
-    attributes: [rev, event, open, h, names, states, ctx, asks, l5h, l5h_at, lwk, lwk_at, lx_names, lx]
+    # q too: both tiles fill the same data, and the activity tile opens a question by it.
+    attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, lx_names, lx]
     example: tile_example
+    preview: { title: "{name}", value: "{state}" }
+  # Whether Claude is at work, since when, in how many sessions; red while a question waits. Same sensor, with the
+  # attributes the overview tile reads too (the screen takes 16 at most), so the overview tile beside it keeps its data.
+  - id: activity
+    name: tile_activity_name
+    icon: robot
+    sizes: { min: 1x1, max: 2x2 }
+    memory: 1200
+    domains: [sensor]
+    has_attributes: [h, states]
+    attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, active, active_since,
+                 last_active]
+    example: tile_activity_example
     preview: { title: "{name}", value: "{state}" }
 
 cards:

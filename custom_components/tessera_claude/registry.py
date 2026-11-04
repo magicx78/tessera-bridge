@@ -30,6 +30,8 @@ LIST_LIMIT = 12
 NAME_LIMIT = 24
 
 STATE_ORDER = {"asking": 0, "permission": 1, "working": 2, "idle": 3, "lost": 4, "ended": 5}
+# The states in which a session does something or waits for the person: what the activity tile counts.
+ACTIVE_STATES = ("working", "asking", "permission")
 STATE_CODES = {"asking": "ask", "permission": "perm", "working": "work", "idle": "idle", "lost": "lost", "ended": "end"}
 
 
@@ -52,6 +54,9 @@ class Session:
     ended_at: float = 0.0
     # The permission hint the sound announced last, so it is said once.
     announced_hint: str = ""
+    # Since when the session is active without a break (0: it is not), and when it was active last (0: never).
+    active_since: float = 0.0
+    last_active: float = 0.0
 
     def shown_state(self, now: float) -> str:
         if self.ended:
@@ -179,6 +184,8 @@ class Registry:
         self._listeners: list[Callable[[], None]] = []
         # What happened since the last `take_events`: new questions and new hints, for sounds and HA events.
         self._pending_events: list[dict[str, Any]] = []
+        # The last activity of a session that is gone from the list, so "last active an hour ago" outlives it.
+        self._last_active = 0.0
 
     # ---- Listening ----
 
@@ -236,6 +243,7 @@ class Registry:
         state = _text(body.get("state"))
         session.state = state if state in STATE_ORDER else "idle"
         session.detail = _text(body.get("detail"), 200)
+        self._track_activity(session, now)
         context = body.get("context")
         session.context = context if isinstance(context, dict) else None
         limits = body.get("limits")
@@ -326,12 +334,25 @@ class Registry:
         session.ended = True
         session.ended_at = now
         session.state = "idle"
+        self._track_activity(session, now)
         session.detail = ""
         for question in self.questions.values():
             if question.session_key == key:
                 self._cancel(question)
         self._changed()
         return {"ok": True}
+
+    @staticmethod
+    def _track_activity(session: Session, now: float) -> None:
+        """Idle to active starts the clock, active to idle stops it; working, asking and waiting in a row are one
+        activity."""
+        if session.state in ACTIVE_STATES:
+            if not session.active_since:
+                session.active_since = now
+            session.last_active = now
+        elif session.active_since:
+            session.active_since = 0.0
+            session.last_active = now
 
     # ---- Time ----
 
@@ -343,6 +364,7 @@ class Registry:
                 not session.ended and now - session.last_seen > FORGET_AFTER
             )
             if gone:
+                self._last_active = max(self._last_active, session.last_active)
                 del self.sessions[key]
                 for qkey, question in list(self.questions.items()):
                     if question.session_key == key:
@@ -499,9 +521,10 @@ class Registry:
         return [s for s in self.sessions.values() if s.shown_state(now) not in ("ended",)]
 
     def snapshot(self, now: float) -> dict[str, Any]:
-        """The sessions sensor's attributes: parallel lists, texts and numbers only, bounded for the screen."""
+        """The sessions sensor's attributes: parallel lists, texts and numbers only, bounded for the screen. The times
+        (`active_since`, `last_active`) are on the registry's clock, `now`'s; 0 for none."""
         ordered = [s for s in self._ordered(now) if not s.ended][:LIST_LIMIT]
-        handles, names, states, ctx, asks = [], [], [], [], []
+        handles, names, states, ctx, asks, first = [], [], [], [], [], []
         open_total = 0
         for session in ordered:
             open_questions = self.open_questions(session)
@@ -511,7 +534,11 @@ class Registry:
             states.append(STATE_CODES.get(session.shown_state(now), "idle"))
             ctx.append(self._context_percent(session))
             asks.append(len(open_questions))
+            first.append(open_questions[0].handle if open_questions else "")
         open_total = sum(1 for q in self.questions.values() if q.status == "open" and q.session_key in self.sessions)
+        # A lost session is not active, whatever it said last: its start does not count, its last word does.
+        active = [s for s in self.sessions.values() if s.shown_state(now) in ACTIVE_STATES and s.active_since]
+        last_active = max([self._last_active, *(s.last_active for s in self.sessions.values())])
         return {
             "rev": self.rev,
             "event_rev": self.event_rev,
@@ -522,5 +549,9 @@ class Registry:
             "states": states,
             "ctx": ctx,
             "asks": asks,
+            "q": first,
             "count": len(self.live_sessions(now)),
+            "active": len(active),
+            "active_since": min((s.active_since for s in active), default=0.0),
+            "last_active": last_active,
         }
