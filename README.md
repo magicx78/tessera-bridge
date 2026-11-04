@@ -1,87 +1,201 @@
+<div align="center">
+
 # tessera-bridge
 
-Every running Claude Code session on the Tessera touch screens in Home Assistant, and Claude's questions answered
-there. Three parts in this repository, one responsibility each (docs/PROTOCOL.md has the whole protocol):
+**Alle laufenden Claude-Code-Sessions auf den Tessera-Touchscreens in Home Assistant – und Claudes Fragen direkt am Screen beantworten.**
 
-| Part | Where | What it does |
+![Mod](https://img.shields.io/badge/Mod-0.2.2-7c3aed)
+![Integration](https://img.shields.io/badge/Integration-0.2.4-41bdf5)
+![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.7-f59e0b)
+![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
+![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
+
+<img src="tessera-plugin/claude_sessions/store.png" alt="Die Kacheln des Plugins auf einem Tessera-Screen" width="640">
+
+</div>
+
+---
+
+## Was es kann
+
+- 🖥️ **Jede Session im Blick** – arbeitet sie, wartet sie auf eine Antwort oder auf eine Freigabe, wie voll ist ihr Kontext? Von einem oder mehreren Rechnern, auch Sessions im Hintergrund der Desktop-App.
+- 👆 **Fragen am Screen beantworten** – stellt Claude eine Auswahlfrage (AskUserQuestion), erscheint sie als Popup. Ein Tipp beantwortet sie in der richtigen Session. Das klappt mit mehreren Teilen, mit Mehrfachauswahl und mit **Am PC**, wenn der Rechner übernehmen soll.
+- 🏁 **Genau eine Antwort zählt** – PC und Screen, zwei Screens oder ein Doppeltipp: Home Assistant entscheidet, wer zuerst war. Die anderen Dialoge schließen sich von selbst.
+- 🔔 **Freigabe-Hinweise** – wartet eine Session am PC auf eine Freigabe, zeigt der Screen einen Hinweis. Antworten musst du am PC.
+- 📊 **Limits des Kontos** – 5-Stunden- und Wochen-Limit mit Reset-Zeit, als Sensoren und auf der Kachel.
+- ⏱️ **Aktivität** – ob Claude gerade arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, wird die ganze Kachel rot.
+- 🧵 **Hintergrund-Aufgaben** – Shells, Agents, Monitore und Workflows, die im Hintergrund laufen, mit ihrer Startzeit.
+- 🔊 **Gong und Sprachausgabe** – auf Wunsch spielt Chime TTS einen Gong und liest die Frage vor.
+
+## Die drei Teile
+
+```mermaid
+flowchart LR
+  subgraph PC["💻 PC (ein oder mehrere)"]
+    A["Claude Code<br/>Session A"] --- M1["Mod<br/>tessera-bridge"]
+    B["Claude Code<br/>Session B"] --- M2["Mod<br/>tessera-bridge"]
+  end
+  subgraph HA["🏠 Home Assistant"]
+    I["Integration<br/>tessera_claude"]
+  end
+  subgraph T["📟 Tessera-Screens"]
+    P["Plugin<br/>claude_sessions"]
+  end
+  M1 -- "HTTP-API<br/>Zustand, Fragen, Limits" --> I
+  M2 --> I
+  I -- "Sensoren, Events" --> P
+  P -- "Dienst answer" --> I
+```
+
+| Teil | Ordner | Aufgabe |
 |---|---|---|
-| **The mod** `tessera-bridge` | `hooks/`, `.claude-plugin/` | A Claude Code mod (Desktop app's Code tab or terminal). Every session that loads it reports itself to Home Assistant under its own id: its state (idle, working, asking, waiting for a permission), its context fill, the account's rate limits, and the questions Claude asks (AskUserQuestion), with ids for every part and option. When a screen answers, the mod hands the answer to the model; when the PC answers, it tells Home Assistant. |
-| **The integration** `tessera_claude` | `custom_components/tessera_claude/` | The registry in Home Assistant: sessions, questions, limits. It settles who answered a question first (the PC or a screen, two screens, a double tap), gives the screens sensors and services with responses, fires events for automations, and plays a chime and the spoken question through Chime TTS when a player is set. |
-| **The display plugin** `claude_sessions` | `tessera-plugin/claude_sessions/` | A regular Tessera plugin: a tile with the sessions and their states, a sessions card with pages, a question card that answers on the screen (several parts, multi-select, On the PC), a popup for a new question or a waiting permission, a top bar item with the open questions. |
+| **Mod** `tessera-bridge` | `hooks/`, `.claude-plugin/` | Ein Claude-Code-Mod für die Desktop-App (Code-Tab) oder das Terminal. Jede Session, die ihn lädt, meldet sich unter eigener ID bei Home Assistant: Zustand, Kontext, Limits, offene Fragen (mit IDs für jeden Teil und jede Option) und Hintergrund-Aufgaben. Antwortet ein Screen, gibt der Mod die Antwort an das Modell weiter. Antwortet der PC, meldet er das an Home Assistant. |
+| **Integration** `tessera_claude` | `custom_components/tessera_claude/` | Das Register in Home Assistant für Sessions, Fragen, Limits und Hintergrund-Aufgaben. Sie entscheidet, wer zuerst geantwortet hat, stellt Sensoren und Dienste mit Antwort bereit, feuert Events für Automationen und spielt Gong und Sprachausgabe ab. |
+| **Tessera-Plugin** `claude_sessions` | `tessera-plugin/claude_sessions/` | Ein normales Tessera-Plugin mit drei Kacheln, Sessions-Karte, Frage-Karte, Popup und einem Element für die obere Leiste. |
 
-Several sessions may ask at once, from several computers; identical titles and options never collide, because
-nothing is matched by its text. A session in the background of the Desktop app is served like the selected one.
+Mehrere Sessions dürfen gleichzeitig fragen, auch von verschiedenen Rechnern. Gleiche Titel oder Optionen kommen sich nicht in die Quere, weil nichts über den Text zugeordnet wird.
 
-## Set up
+## Am Screen
 
-### 1. Home Assistant: the integration
+| Kachel | Größen | Zeigt |
+|---|---|---|
+| **Claude-Sessions** | 1×1 bis 3×3 | Die Sessions mit ihrem Zustand und die offenen Fragen als Badge. Ab zwei Zeilen Höhe stehen die Limits in der letzten Zeile. Ein Tipp öffnet die Sessions-Karte. |
+| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. |
+| **Claude im Hintergrund** | 1×1 bis 3×3 | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. |
 
-HACS → Integrations → custom repository `https://github.com/magicx78/tessera-bridge` (category Integration), or
-copy `custom_components/tessera_claude` into `/config/custom_components/`. Restart Home Assistant, then Settings →
-Devices & services → Add integration → **Tessera Claude**. Everything in its form is optional: a `media_player` for a
-chime and the spoken question (the Chime TTS integration must be installed for that), the chime preset, a `tts`
-entity, the language, whether the question is read aloud, whether a permission prompt is announced. Change them
-later under the integration's Options.
+Dazu kommen:
 
-Then, in your Home Assistant profile under Security, create a long-lived access token for the mod.
+- **Sessions-Karte** – jede Session mit Rechner, Kontext und dem, worauf sie wartet, seitenweise.
+- **Frage-Karte** – die Optionen als Tasten. Mehrere Teile kommen nacheinander, bei Mehrfachauswahl gibt es eine Senden-Taste, dazu **Am PC**.
+- **Popup** bei einer neuen Frage oder einer wartenden Freigabe. Beides lässt sich in den Plugin-Einstellungen abschalten.
+- **Claude-Fragen** für die obere Leiste: die Zahl der offenen Fragen.
 
-### 2. Claude Code: the mod
+## Einrichten
 
-In a Claude Code session (Desktop app, Code tab, or the terminal, v2.1.287 or later):
+### 1. Home Assistant: die Integration
+
+HACS → Integrationen → benutzerdefiniertes Repository `https://github.com/magicx78/tessera-bridge` (Kategorie Integration) hinzufügen. Alternativ `custom_components/tessera_claude` nach `/config/custom_components/` kopieren.
+
+Home Assistant neu starten. Dann unter Einstellungen → Geräte & Dienste → Integration hinzufügen → **Tessera Claude** auswählen.
+
+Alle Felder im Formular sind optional:
+
+- ein `media_player` für Gong und Sprachausgabe (dafür muss Chime TTS installiert sein)
+- der Gong
+- eine `tts`-Entität
+- die Sprache
+- ob die Frage vorgelesen wird
+- ob eine Freigabe angesagt wird
+
+Später lässt sich das alles unter **Optionen** ändern.
+
+Danach in deinem Home-Assistant-Profil unter **Sicherheit** ein langlebiges Zugriffstoken für den Mod anlegen.
+
+### 2. Claude Code: der Mod
+
+In einer Claude-Code-Session (Desktop-App mit Code-Tab oder Terminal, ab v2.1.287):
 
 ```
 /plugin marketplace add magicx78/tessera-bridge
 /plugin install tessera-bridge@tessera-bridge
 ```
 
-Then set its options in the plugin's configuration (`/plugin`, Installed, tessera-bridge): the Home Assistant URL as
-this computer reaches it, the token, optionally a name for this computer (shown in the session list), and the
-permission hint settings. Run `/reload-plugins` in open sessions, or start new ones. Without a token the mod does
-nothing.
+Danach die Optionen setzen, unter `/plugin` → Installed → tessera-bridge:
 
-To load a checkout for one session instead: `claude --plugin-dir /path/to/tessera-bridge`.
+| Option | Bedeutung | Standard |
+|---|---|---|
+| `haUrl` | Adresse von Home Assistant, so wie dieser Rechner sie erreicht, ohne `/` am Ende | `http://homeassistant.local:8123` |
+| `haToken` | das langlebige Token. Ist es leer, bleibt der Mod aus. | – |
+| `instanceName` | Name dieses Rechners in der Sessions-Liste | leer |
+| `sessionName` | Name für die Sessions dieser Installation. Bleibt er leer, wird der Projektordner genommen. | leer |
+| `permissionHints` | `on`: wartende Freigaben werden am Screen als Hinweis gezeigt | `on` |
+| `hintDelay` | So viele Sekunden muss eine Freigabe offen sein, bevor der Hinweis kommt. Im Auto-Modus der App sind 10–15 sinnvoll. | `8` |
 
-### 3. Tessera: the plugin
+In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden.
 
-Plugins → **Add with a link** → `https://github.com/magicx78/tessera-bridge/tree/main/tessera-plugin/claude_sessions`
-(or copy `tessera-plugin/claude_sessions` into `/config/tessera-plugins/claude_sessions/` as a test folder). Add it
-to a screen; when asked for the sessions sensor, choose `sensor.claude_sessions`. Place the **Claude sessions** tile
-in Layout. `tessera-plugin/claude_sessions/README.md` has the rest.
+Willst du nur für eine Session einen Checkout laden, geht das mit `claude --plugin-dir /pfad/zu/tessera-bridge`.
 
-## How a question travels
+### 3. Tessera: das Plugin
 
-1. Claude calls AskUserQuestion in session A. The mod registers the question with Home Assistant (ids for the call,
-   its parts and options), keeps the dialog in the app open beneath, and polls Home Assistant every 1.5 s.
-2. Home Assistant raises `event` on `sensor.claude_sessions`; the screen shows a popup (a tap opens the question) and
-   a badge on the tile; Chime TTS says it when a player is set.
-3. A tap on an option sends `tessera_claude.answer` with the question's handle, its revision and the option ids. The
-   integration checks it and answers `accepted` once, to exactly one answer.
-4. The mod's next poll sees the answer, hands it to the model, and the app's dialog is over. If the PC answered first,
-   the mod claims that at the integration; if a screen was quicker there, the screen's answer is the one the model
-   gets.
+Plugins → **Mit Link hinzufügen** → `https://github.com/magicx78/tessera-bridge/tree/main/tessera-plugin/claude_sessions`. Alternativ den Ordner als Testordner nach `/config/tessera-plugins/claude_sessions/` kopieren.
 
-## Migration from version 0.1
+Das Plugin einem Screen hinzufügen. Fragt Tessera nach dem Sessions-Sensor, `sensor.claude_sessions` wählen. Der Screen wird danach einmal gebaut.
 
-- The `input_text.claude_screen_answer` helper, the `esphome.screen_alert` automation and the alerts on the screens
-  are no longer used: the plugin answers through the integration's services. Delete the helper and the automation
-  when you like; nothing writes to them any more.
-- `sensor.claude_limit_5h`, `sensor.claude_limit_week` and `sensor.claude_5h_reset` keep their ids and meaning; they
-  are the integration's entities now, so remove the old REST-created states once (they linger until a restart).
-- `sensor.claude_context` is gone: it could only ever hold one session's value. Every session's context is in the
-  lists of `sensor.claude_sessions` (`names`, `ctx`), on the tile and in the sessions card.
-- The sound options moved from the mod to the integration (they belong to Home Assistant, not to a session). The
-  mod's options `screen`, `answerEntity`, `soundPlayer`, `soundChime`, `soundTts`, `soundLanguage` and `soundSpeak`
-  are not read any more; `haUrl`, `haToken`, `permissionHints` and `hintDelay` stay.
-- Dashboards that used the old sensors keep working; the meter tiles on a screen can show the new ones too, but the
-  plugin's tile shows all of it in one place.
+Im Layout die Kacheln platzieren, sie stehen in der Gruppe Plugins:
 
-## Development
+| Kachel | Sensor |
+|---|---|
+| **Claude-Sessions** | `sensor.claude_sessions` |
+| **Claude aktiv** | `sensor.claude_sessions` |
+| **Claude im Hintergrund** | `sensor.claude_background` |
 
-- Mod: `claude plugin validate .` and `claude plugin test .` (the tests in `tests/tessera-bridge.test.ts` run with
-  the engine's own test kit; no session, no network). The types the hooks are written against are written by
-  `/plugin-types` into `.claude-plugin/types/` (not checked in).
-- Integration: `python3 -m pytest tests/test_registry.py` for the registry's rules (plain Python), and with
-  `pytest-homeassistant-custom-component` installed, `python3 -m pytest tests/test_integration.py` against a real
-  Home Assistant core.
-- Plugin: from a checkout of `MaxGramser/tessera-plugins`, `python3 tools/check.py <this repo>/tessera-plugin/claude_sessions`,
-  `python3 tools/preview.py <…> --strict`, `python3 tools/store_image.py <…>`.
+Mehr steht in [`tessera-plugin/claude_sessions/README.de.md`](tessera-plugin/claude_sessions/README.de.md).
+
+## In Home Assistant
+
+### Sensoren
+
+| Entität | Inhalt |
+|---|---|
+| `sensor.claude_sessions` | Anzahl der Sessions, die gerade melden. Die Attribute enthalten die Listen für den Screen: Namen, Zustände, Kontext, Fragen, Aktivität und Limits. |
+| `sensor.claude_questions` | offene Fragen |
+| `sensor.claude_limit_5h` | 5-Stunden-Limit in % |
+| `sensor.claude_limit_week` | Wochen-Limit in % |
+| `sensor.claude_5h_reset` | Zeit bis zum Reset des 5-Stunden-Fensters, z. B. „1h 09m“ |
+| `sensor.claude_limits` | weitere Limit-Arten, falls das Konto welche meldet |
+| `sensor.claude_background` | Anzahl der Hintergrund-Aufgaben. Die Attribute `bg_titles`, `bg_kinds`, `bg_sess`, `bg_at` und `bg_hm` enthalten die Einzelheiten, das Neueste zuerst. |
+
+### Dienste und Events
+
+- **Dienste** (mit Antwort): `tessera_claude.get_overview`, `tessera_claude.get_question`, `tessera_claude.get_hint` und `tessera_claude.answer`. Das Plugin ruft sie über die Tessera-App auf.
+- **Events** für eigene Automationen, etwa einen eigenen Gong oder eine Push-Nachricht: `tessera_claude_question` bei einer neuen Frage, `tessera_claude_hint` bei einer wartenden Freigabe.
+
+## So reist eine Frage
+
+```mermaid
+sequenceDiagram
+  participant C as Claude (Session A)
+  participant M as Mod
+  participant H as Home Assistant
+  participant S as Tessera-Screen
+  C->>M: AskUserQuestion
+  M->>H: Frage melden (IDs für Teile und Optionen)
+  H-->>S: event auf sensor.claude_sessions
+  S->>S: Popup, Badge, Gong
+  S->>H: tessera_claude.answer (Handle, Revision, Options-IDs)
+  H-->>S: accepted (genau eine Antwort)
+  M->>H: Abfrage alle 1,5 s
+  H-->>M: Antwort
+  M->>C: Antwort ans Modell, der Dialog in der App schließt
+```
+
+War der PC schneller, meldet der Mod das bei der Integration an. Kam der Screen dort noch früher an, bekommt das Modell die Antwort vom Screen.
+
+## Gut zu wissen
+
+- **Freitext** tippt man nicht am Screen. Bei so einer Frage zeigt der Screen nur die Auswahl, und **Am PC** gibt sie an den Rechner ab.
+- **Freigaben** wie „Darf ich diesen Befehl ausführen?“ werden nie am Screen beantwortet. Das Popup ist nur ein Hinweis.
+- **„getrennt“** steht bei einer Session, deren Mod nicht mehr meldet, etwa weil der PC schläft oder das Netz weg ist. Nach zehn Minuten verschwindet sie.
+- **Limits** gehören dem Konto. Sie gelten für alle Sessions gleich und werden nie zusammengezählt. Es zählt der Wert der Session, die zuletzt gemessen hat.
+- **Textlängen** sind durch den Transport begrenzt: höchstens sechs Zeilen mit je 48 Bytes. Lange Optionsbeschreibungen werden gekürzt.
+
+## Umstieg von Version 0.1
+
+- Der Helfer `input_text.claude_screen_answer`, die Automation `esphome.screen_alert` und die Alerts auf den Screens werden nicht mehr gebraucht. Du kannst sie löschen.
+- `sensor.claude_limit_5h`, `sensor.claude_limit_week` und `sensor.claude_5h_reset` behalten ID und Bedeutung. Sie gehören jetzt der Integration.
+- `sensor.claude_context` gibt es nicht mehr. Der Kontext jeder Session steht in `sensor.claude_sessions`.
+- Die Sound-Optionen sind vom Mod in die Integration gewandert. Der Mod liest nur noch `haUrl`, `haToken`, `instanceName`, `sessionName`, `permissionHints` und `hintDelay`.
+
+## Entwicklung
+
+| Teil | Prüfen |
+|---|---|
+| Mod | `claude plugin validate .` und `claude plugin test .` (`tests/tessera-bridge.test.ts`, ohne Session und ohne Netz) |
+| Integration | `python3 -m pytest tests/test_registry.py` für die Regeln des Registers. Mit `pytest-homeassistant-custom-component` zusätzlich `python3 -m pytest tests/test_integration.py`. |
+| Plugin | aus einem Checkout von `MaxGramser/tessera-plugins`: `python3 tools/check.py <repo>/tessera-plugin/claude_sessions`, dazu `tools/preview.py … --strict` und `tools/store_image.py …` |
+
+Das ganze Protokoll steht in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
+## Lizenz
+
+[MIT](LICENSE) © magicx78
