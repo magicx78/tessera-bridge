@@ -6,7 +6,7 @@
 
 ![Mod](https://img.shields.io/badge/Mod-0.2.2-7c3aed)
 ![Integration](https://img.shields.io/badge/Integration-0.2.4-41bdf5)
-![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.7-f59e0b)
+![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.8-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
 ![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
 

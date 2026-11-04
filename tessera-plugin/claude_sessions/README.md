@@ -6,7 +6,10 @@ Every running Claude Code session on the screen: which ones work, wait for an an
 
 ## What it adds
 
-- **A tile**: the sessions and their states, the open questions as a badge, the limits on the last line (from 2 rows up). A tap opens the sessions card.
+- **Claude sessions** (tile, 1x1 to 3x3): the sessions and their states, the open questions as a badge, the limits on the last line (from 2 rows up). A tap opens the sessions card.
+- **Claude active** (tile, 1x1 to 2x2): whether Claude works, since when and in how many sessions; red as a whole while a question waits, and a tap opens it. Option **Animation**: a small picture that works, sleeps and waits with you — *Building a mosaic*, *Mosaic muncher*, *Claude spark* or *None*.
+- **Claude limits** (tile, 1x1 to 3x2): the 5-hour and the weekly limit as bars, each with a mark where an even pace would stand and when it starts anew; amber from 70 %, red from 90 %. A window of one model that Claude Code reports (a Fable or Opus week, say) comes as a further bar.
+- **Claude in the background** (tile, 1x1 to 3x3): what runs in the background of the sessions (shells, agents, monitors, workflows), newest first, with its start time. Reads `sensor.claude_background`.
 - **The sessions card**: every session with its computer, context and what it waits for, a page at a time. A tap on a session with a question opens that question.
 - **The question card**: the question, its options as keys (several parts one after another; a multi-select with a Send key), and **On the PC** to leave it to the computer. The answer is confirmed by Home Assistant: exactly one answer counts, whoever was first.
 - **A popup** when a new question arrives (a tap opens it) and when a session waits for a permission on the PC (which is answered there). Each has a switch under Settings.
@@ -17,7 +20,7 @@ Every running Claude Code session on the screen: which ones work, wait for an an
 1. In Home Assistant, install the Tessera Claude integration (HACS, custom repository `https://github.com/magicx78/tessera-bridge`, or copy `custom_components/tessera_claude` into `/config/custom_components/`), restart, add it under Settings → Integrations. A sound player, chime and speech engine there are optional (Chime TTS).
 2. In Claude Code, install the tessera-bridge mod (`/plugin marketplace add magicx78/tessera-bridge`, then `/plugin install tessera-bridge@tessera-bridge`) and set the Home Assistant URL and a long-lived access token in its options. Every session that loads the mod reports itself.
 3. Add this plugin to a screen in Tessera: Plugins → **Add with a link** → `https://github.com/magicx78/tessera-bridge/tree/main/tessera-plugin/claude_sessions`. When asked for the sessions sensor, choose `sensor.claude_sessions`. The screen builds once.
-4. In Layout, place the **Claude sessions** tile (Plugins group); optionally the **Claude questions** item in a top bar.
+4. In Layout, place the tiles you want (Plugins group): **Claude sessions**, **Claude active**, **Claude limits** with `sensor.claude_sessions`, **Claude in the background** with `sensor.claude_background`; optionally the **Claude questions** item in a top bar. The animation of **Claude active** is chosen in the tile's settings.
 5. Settings → Plugins → Claude sessions: whether a new question or a waiting permission opens a popup.
 
 ## Good to know
@@ -25,7 +28,8 @@ Every running Claude Code session on the screen: which ones work, wait for an an
 - Free text is not typed on the screen: such a question shows its choices only, and **On the PC** leaves it there.
 - A permission prompt ("may I run this command?") is never answered on the screen: the popup is a hint.
 - The screen shows "lost" for a session whose bridge stopped reporting (the PC sleeps, the network is away); it goes after ten minutes.
-- The account's limits are the account's: the same for every session, never added up.
+- The account's limits are the account's: the same for every session, never added up. A model window shows only once Claude Code reports one; until then the limits tile shows the 5-hour and the weekly bar.
+- The animation moves one step a second with the tile's clock: no timer runs on the screen for it.
 - Texts on the screen are bounded by the transport: a question travels as lines of up to 48 bytes, at most six lines; a long option description is cut.
 
 ## Privacy
