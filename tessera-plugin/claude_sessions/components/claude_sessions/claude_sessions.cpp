@@ -415,22 +415,35 @@ class ActivityTile : public tessera::Tile {
     name_ = c.name && *c.name ? c.name : plugin_->text("activity_title");
     const bool large = ui::large();
     gap_ = ui::px(large ? 6 : 4);
+    pad_ = ui::px(large ? 8 : 6);
+    // The ground: the whole tile red while a question waits, so it is seen from across the room.
+    ground_ = ui::block(c.parent, theme::CARD);
+    lv_obj_set_pos(ground_, 0, 0);
+    lv_obj_set_size(ground_, width_, height_);
+    lv_obj_set_style_radius(ground_, ui::px(large ? 12 : 8), 0);
+    lv_obj_set_style_pad_all(ground_, 0, 0);
+    lv_obj_set_style_bg_opa(ground_, LV_OPA_TRANSP, 0);
+    // The parts stand on the ground, so their colours are read against it.
+    body_ = lv_obj_create(ground_);
+    lv_obj_remove_style_all(body_);
+    lv_obj_remove_flag(body_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(body_, LV_OBJ_FLAG_SCROLLABLE);
     // The head: the icon, the name, and at the right the badge with the open questions.
-    icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
-    title_ = ui::label(c.parent, Font::TITLE, theme::INK);
+    icon_ = ui::label(body_, Font::ICON_SMALL, theme::MUTED);
+    title_ = ui::label(body_, Font::TITLE, theme::INK);
     badge_h_ = ui::line_height(Font::BODY) + ui::px(large ? 6 : 4);
-    badge_ = ui::block(c.parent, theme::ACCENT);
+    badge_ = ui::block(body_, theme::ACCENT);
     lv_obj_set_style_radius(badge_, LV_RADIUS_CIRCLE, 0);
     badge_text_ = ui::label(badge_, Font::BODY, theme::ON_ACCENT);
     lv_obj_set_style_text_align(badge_text_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(badge_text_);
     head_ = std::max({ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL), badge_h_});
-    big_ = ui::label(c.parent, Font::VALUE, theme::INK);
-    since_ = ui::label(c.parent, Font::BODY_LARGE, theme::INK);
-    of_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    big_ = ui::label(body_, Font::VALUE, theme::INK);
+    since_ = ui::label(body_, Font::BODY_LARGE, theme::INK);
+    of_ = ui::label(body_, Font::BODY, theme::MUTED);
     for (int i = 0; i < MAX_TILE_ROWS; ++i) {
-      row_name_[i] = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
-      row_state_[i] = ui::label(c.parent, Font::BODY, theme::MUTED);
+      row_name_[i] = ui::label(body_, Font::BODY, theme::INK_SOFT);
+      row_state_[i] = ui::label(body_, Font::BODY, theme::MUTED);
       lv_obj_set_style_text_align(row_state_[i], LV_TEXT_ALIGN_RIGHT, 0);
     }
   }
@@ -478,22 +491,37 @@ class ActivityTile : public tessera::Tile {
     waits = waits && busy;
     // Red while a question waits, amber while an approval waits at the PC, the accent while it works, muted at rest.
     const Tone tone = asks ? Tone::ALERT : waits ? Tone::BUSY : busy ? Tone::ACCENT : Tone::NORMAL;
+    grounded_ = asks;
+    if (grounded_) ui::set_fill(ground_, Tone::ALERT, theme::CARD);
+    lv_obj_set_style_bg_opa(ground_, grounded_ ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    // On the ground the parts keep off its edge: a little at the sides, at the top and foot only what the tile
+    // spares beyond its head and two lines.
+    const int spare = height_ - head_ - ui::line_height(Font::BODY_LARGE) - ui::line_height(Font::BODY) - gap_;
+    const int in_x = grounded_ ? pad_ / 2 : 0, in_y = grounded_ ? std::max(0, std::min(pad_ / 2, spare / 2)) : 0;
+    bw_ = std::max(1, width_ - 2 * in_x);
+    bh_ = std::max(1, height_ - 2 * in_y);
+    lv_obj_set_pos(body_, in_x, in_y);
+    lv_obj_set_size(body_, bw_, bh_);
+    ink(title_, Tone::NORMAL, theme::INK);
     ui::set_text(icon_, ui::icon(asks ? ICON_ROBOT_ASKS : waits ? ICON_LOCK : ICON_ROBOT));
-    ui::set_tone(icon_, tone, theme::MUTED);
+    ink(icon_, tone, theme::MUTED);
 
     hide(badge_, !asks);
     if (asks) {
       const std::string count = std::to_string(o.open);
       const int w = std::max(badge_h_, ui::text_width(count, Font::BODY) + ui::px(10));
       lv_obj_set_size(badge_, w, badge_h_);
-      lv_obj_set_pos(badge_, width_ - w, (head_ - badge_h_) / 2);
-      ui::set_fill(badge_, Tone::ALERT, theme::ACCENT);
+      lv_obj_set_pos(badge_, bw_ - w, (head_ - badge_h_) / 2);
+      // On the red ground the badge turns round: light, its number red.
+      ui::set_fill(badge_, grounded_ ? Tone::NORMAL : Tone::ALERT, grounded_ ? theme::ON_ACCENT : theme::ACCENT);
+      if (grounded_) ui::set_tone(badge_text_, Tone::ALERT, theme::ON_ACCENT);
+      else ui::set_color(badge_text_, theme::ON_ACCENT);
       ui::set_text(badge_text_, count);
     }
     const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
     lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
     lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
-    lv_obj_set_width(title_, std::max(1, width_ - icon_w - (asks ? badge_h_ * 2 : 0)));
+    lv_obj_set_width(title_, std::max(1, bw_ - icon_w - (asks ? badge_h_ * 2 : 0)));
 
     for (int i = 0; i < MAX_TILE_ROWS; ++i) {
       hide(row_name_[i], true);
@@ -506,9 +534,9 @@ class ActivityTile : public tessera::Tile {
       hide(since_, true);
       hide(of_, false);
       lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
-      lv_obj_set_size(of_, width_, body_h);
+      lv_obj_set_size(of_, bw_, body_h);
       lv_obj_set_pos(of_, 0, head_ + gap_);
-      ui::set_color(of_, theme::MUTED);
+      ink(of_, Tone::NORMAL, theme::MUTED);
       ui::set_text(of_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
       return;
     }
@@ -535,8 +563,8 @@ class ActivityTile : public tessera::Tile {
     // row, the active sessions' names the rest.
     const std::string big = std::to_string(o.active);
     const bool wide = columns_ >= 2;
-    const int top_room = rows_ >= 2 ? std::max(2 * body_h, height_ / rows_ - head_) : height_ - head_;
-    const int number_w = wide ? width_ * 2 / 5 : width_;
+    const int top_room = rows_ >= 2 ? std::max(2 * body_h, bh_ / rows_ - head_) : bh_ - head_;
+    const int number_w = wide ? bw_ * 2 / 5 : bw_;
     const int under = wide ? 0 : body_h;
     Font face = Font::BODY_LARGE;
     for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
@@ -548,15 +576,15 @@ class ActivityTile : public tessera::Tile {
     hide(big_, false);
     ui::set_font(big_, face);
     ui::set_text(big_, big);
-    ui::set_tone(big_, tone, busy ? theme::INK : theme::MUTED);
+    ink(big_, tone, busy ? theme::INK : theme::MUTED);
     hide(of_, false);
 
     int bottom;
     if (wide) {
       // Beside the number: the time on the first line, "of N sessions" under it.
       const int body_large_h = ui::line_height(Font::BODY_LARGE);
-      const int text_x = std::min(width_ - 1, ui::text_width(big, face) + ui::px(12));
-      const int text_w = std::max(1, width_ - text_x);
+      const int text_x = std::min(bw_ - 1, ui::text_width(big, face) + ui::px(12));
+      const int text_w = std::max(1, bw_ - text_x);
       const int words_h = body_large_h + body_h;
       const int block_h = std::max(big_h, words_h);
       const int top = head_ + std::max(0, (top_room - block_h) / 2);
@@ -567,28 +595,28 @@ class ActivityTile : public tessera::Tile {
       lv_obj_set_size(since_, text_w, body_large_h);
       lv_obj_set_pos(since_, text_x, top + (block_h - words_h) / 2);
       ui::set_text(since_, since);
-      ui::set_tone(since_, word_tone, busy ? theme::INK : theme::MUTED);
+      ink(since_, word_tone, busy ? theme::INK : theme::MUTED);
       lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
       lv_obj_set_size(of_, text_w, body_h);
       lv_obj_set_pos(of_, text_x, top + (block_h - words_h) / 2 + body_large_h);
       ui::set_text(of_, of);
-      ui::set_color(of_, theme::MUTED);
+      ink(of_, Tone::NORMAL, theme::MUTED);
       bottom = top + block_h + gap_;
     } else {
       // Under the number: one word of state.
       const int top = head_ + std::max(0, (top_room - big_h - body_h) / 2);
-      lv_obj_set_size(big_, width_, big_h);
+      lv_obj_set_size(big_, bw_, big_h);
       lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_pos(big_, 0, top);
       hide(since_, true);
       lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_CENTER, 0);
-      lv_obj_set_size(of_, width_, body_h);
+      lv_obj_set_size(of_, bw_, body_h);
       lv_obj_set_pos(of_, 0, top + big_h);
       ui::set_text(of_, asks || waits ? since
                         : busy        ? plugin_->text("activity_on")
                         : o.count > 0 ? plugin_->text("activity_rest")
                                       : plugin_->text("none"));
-      ui::set_tone(of_, word_tone, theme::MUTED);
+      ink(of_, word_tone, theme::MUTED);
       bottom = top + big_h + body_h + gap_;
     }
 
@@ -597,33 +625,41 @@ class ActivityTile : public tessera::Tile {
     const int step = body_h + gap_ / 2;
     int y = bottom, shown = 0;
     for (const SessionRow &row : o.rows) {
-      if (shown >= MAX_TILE_ROWS || y + body_h > height_) break;
+      if (shown >= MAX_TILE_ROWS || y + body_h > bh_) break;
       if (!is_active(row.state)) continue;
       const std::string state = state_word(plugin_, row.state);
-      const int state_w = std::min(width_ / 2, ui::text_width(state, Font::BODY) + ui::px(4));
+      const int state_w = std::min(bw_ / 2, ui::text_width(state, Font::BODY) + ui::px(4));
       lv_obj_t *name = row_name_[shown], *word = row_state_[shown];
       hide(name, false);
       hide(word, false);
       lv_obj_set_size(word, state_w, body_h);
-      lv_obj_set_pos(word, width_ - state_w, y);
+      lv_obj_set_pos(word, bw_ - state_w, y);
       ui::set_text(word, state);
       const Tone row_tone = !std::strcmp(row.state, "ask")    ? Tone::ALERT
                             : !std::strcmp(row.state, "perm") ? Tone::BUSY
                                                               : Tone::NORMAL;
-      ui::set_tone(word, row_tone, theme::MUTED);
-      lv_obj_set_size(name, std::max(1, width_ - state_w - ui::px(6)), body_h);
+      ink(word, row_tone, theme::MUTED);
+      lv_obj_set_size(name, std::max(1, bw_ - state_w - ui::px(6)), body_h);
       lv_obj_set_pos(name, 0, y);
       ui::set_text(name, row.name);
+      ink(name, Tone::NORMAL, theme::INK_SOFT);
       y += step;
       shown += 1;
     }
   }
 
+  // A label's colour: its tone, or white on the red ground.
+  void ink(lv_obj_t *label, Tone tone, theme::Role normal) {
+    if (grounded_) ui::set_color(label, theme::ON_ACCENT);
+    else ui::set_tone(label, tone, normal);
+  }
+
   ClaudeSessions *plugin_;
   tessera::Text entity_, name_, wait_;
   int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0;
-  bool has_entity_ = false;
-  lv_obj_t *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{};
+  int pad_ = 0, bw_ = 1, bh_ = 1;
+  bool has_entity_ = false, grounded_ = false;
+  lv_obj_t *ground_{}, *body_{}, *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{};
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
 };
 
@@ -913,7 +949,9 @@ class QuestionCard : public tessera::Card {
     const bool mine = q.valid && !std::strcmp(q.h, handle_);
     const bool over = mine && std::strcmp(q.status, "open") != 0;
     if (!mine || over) {
-      // Nothing to answer: say so and offer the way out.
+      // Nothing to answer: say so and offer the way out. Answered elsewhere (another screen, the PC), it also closes
+      // itself after a moment.
+      if (over && !done_ && close_in_ticks_ == 0) close_in_ticks_ = 3;
       hide(chip_, true);
       hide(who_, true);
       hide(text_, true);
@@ -1340,7 +1378,7 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
   }
   if (rev_ && rev_->has_state() && !roomy::same(rev_->state, seen_rev_)) {
     seen_rev_ = roomy::text(rev_->state);
-    if (!first_rev_ && (sessions_card_ || question_card_)) overview_due_ = true;
+    if (!first_rev_ && (sessions_card_ || question_card_ || popup_shown_)) overview_due_ = true;
     first_rev_ = false;
   }
   if (overview_due_) {
@@ -1356,6 +1394,18 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
       if (now_ms - last_question_ms_ >= OVERVIEW_SPACING_MS) {
         question_for_popup_ = false;
         request_question(question_.h);
+      } else {
+        pending = true;
+      }
+    }
+    // A popup asks whether what it shows still waits.
+    if (popup_shown_) {
+      if (now_ms - last_check_ms_ >= OVERVIEW_SPACING_MS) {
+        JsonDocument data;
+        if (popup_.question) data["question"] = popup_.handle;
+        else data["session"] = popup_.handle;
+        asked_check_ = ask(popup_.question ? "get_question" : "get_hint", data);
+        last_check_ms_ = now_ms;
       } else {
         pending = true;
       }
@@ -1406,6 +1456,15 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
       popup_.lines.clear();
       popup_.lines.push_back(roomy::text(std::string(result["detail"] | "")));
       show_popup_now();
+    }
+  } else if (re && re == asked_check_) {
+    asked_check_ = 0;
+    // Answered on another screen or at the PC, or the approval was given: the popup has nothing left to say.
+    const bool waits = popup_.question ? !std::strcmp(result["status"] | "", "open") : !std::strcmp(result["state"] | "", "perm");
+    ESP_LOGD(TAG, "Popup check %u: ok %d, still waits %d", (unsigned) re, (int) ok, (int) waits);
+    if (ok && !result.isNull() && !waits && popup_shown_) {
+      popup_shown_ = nullptr;
+      tessera::close_popup(this);
     }
   } else if (re && re == asked_answer_) {
     asked_answer_ = 0;
