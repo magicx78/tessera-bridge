@@ -45,6 +45,10 @@ struct BackgroundRow {
   char sess[28] = "";
   char hm[6] = "";
   uint32_t at = 0;
+  // Steps the task reported through the mod: -1 and 0 while unknown.
+  int done = -1, total = 0;
+  // What the task said last (only in the get_background answer; "" when none).
+  char note[124] = "";
 };
 
 struct Option {
@@ -81,10 +85,11 @@ struct PopupView {
 };
 
 class SessionsCard;
+class BackgroundCard;
 class QuestionCard;
 class AskPopup;
 
-// The plugin: a tile ("overview"), two cards ("sessions", "question"), a top bar item ("asks"), a popup for a new
+// The plugin: four tiles (overview, activity, limits, background), three cards ("sessions", "background", "question"), a top bar item ("asks"), a popup for a new
 // question or a permission hint, and two settings rows. Everything it asks of Home Assistant goes through
 // tessera::send (the integration's services); everything it hears comes back in on_message.
 class ClaudeSessions : public Component, public tessera::Plugin {
@@ -102,6 +107,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   void set_rev(text_sensor::TextSensor *s) { rev_ = s; }
   void set_question_popup(switch_::Switch *s) { question_popup_ = s; }
   void set_hint_popup(switch_::Switch *s) { hint_popup_ = s; }
+  void set_notify(text_sensor::TextSensor *s) { notify_ = s; }
 
   // ---- The model, shared by the tile, the cards and the popup ----
   Overview &overview() { return overview_; }
@@ -109,11 +115,23 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   PopupView &popup_view() { return popup_; }
   // The tile's data (the sensor's attributes) refreshes the overview too.
   void take_tile_data(JsonObjectConst data);
+  // The background tasks for the background card: from the sensor's lists, then with their notes from get_background.
+  const tessera::List<BackgroundRow> &background() const { return background_; }
+  bool background_valid() const { return background_valid_; }
+  // The sensor's rows; notes of rows that stay are kept until the answer to get_background brings them anew.
+  void take_background(JsonObjectConst attributes);
 
   // ---- Asking the integration (tessera::send); the answers land in on_message ----
   void request_overview();
+  void request_background();
+  // Empties the background list (the card does it on opening, before the notes come anew).
+  void clear_background();
   void request_question(const char *handle);
   void request_hint(const char *handle);
+  // The announcement on a question or hint (speech, tone, none), kept by the integration: shown at once, the sensor's
+  // attribute catches up a moment later.
+  void request_notify(const char *mode);
+  int notify_index() const;
   // The answer to the question the model holds: option ids per part. The card hears the outcome in `answered`.
   bool send_answer();
 
@@ -124,6 +142,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
 
   // The cards and the popup on the glass, to hand them what came in (each clears itself in its destructor).
   SessionsCard *sessions_card_ = nullptr;
+  BackgroundCard *background_card_ = nullptr;
   QuestionCard *question_card_ = nullptr;
   AskPopup *popup_shown_ = nullptr;
 
@@ -134,16 +153,32 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   // Sends the request of `pending_event_` (a question for the popup, a hint); on_interval repeats it while no reply came.
   void send_event_request();
   void show_popup_now();
+  // A popup switch changed (on the glass or in Home Assistant): off closes a popup of its kind and drops a request
+  // still out, on shows what waits now.
+  void popup_switch_changed(bool question, bool on);
+  void remember_event(const std::string &event);
   tessera::BarItem bar() const;
   uint32_t ask(const char *service, JsonDocument &data);
 
   text_sensor::TextSensor *event_{}, *event_rev_{}, *open_{}, *rev_{};
   switch_::Switch *question_popup_{}, *hint_popup_{};
+  text_sensor::TextSensor *notify_{};
+  // The two switches as on_interval saw them last; the first pass only takes them.
+  bool question_popup_was_ = false, hint_popup_was_ = false, popups_seen_ = false;
+  // The mode the person chose on the glass, until the sensor's attribute says the same (or NOTIFY_PENDING_MS passed).
+  uint32_t asked_notify_ = 0, pending_notify_ms_ = 0;
+  char pending_notify_[8] = "";
   Overview overview_;
+  // The background card's rows; asked again (spaced like the overview) when the sensor changed while it is open.
+  tessera::List<BackgroundRow> background_;
+  bool background_valid_ = false, background_due_ = false;
+  uint32_t asked_background_ = 0, last_background_ms_ = 0;
   Question question_;
   PopupView popup_;
   char pending_question_[12] = "";
   tessera::Text seen_event_, seen_event_rev_, seen_rev_;
+  // The newest event of each kind, so switching a popup on finds its own even after a later event of the other kind.
+  std::string last_question_event_, last_hint_event_;
   bool event_seen_ = false, event_rev_seen_ = false;
   // When the event was last handled, by the screen's clock: the event and its counter arrive as two values, and the
   // second of a pair is no second event.

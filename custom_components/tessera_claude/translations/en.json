@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "Tessera Claude",
-        "description": "Claude sessions, their questions and the account's limits for Tessera screens. Everything here is optional: a player for a chime and the spoken question through Chime TTS, and whether a permission prompt on the PC is announced.",
+        "description": "Claude sessions, their questions and the account's limits for Tessera screens. Everything here is optional: a player for the announcement of a new question (chime and spoken text, or the chime alone) through Chime TTS, and whether a permission prompt on the PC is announced.",
         "data": {
           "player": "Sound player (media_player)",
           "chime": "Chime (Chime TTS preset, empty for none)",
           "tts": "Speech engine (tts entity, empty for Chime TTS's default)",
           "language": "Speech language",
-          "speak": "Read the question aloud",
+          "notify": "Announce a question or hint",
           "hints": "Announce permission prompts"
         }
       }
@@ -25,9 +25,18 @@
           "chime": "Chime (Chime TTS preset, empty for none)",
           "tts": "Speech engine (tts entity, empty for Chime TTS's default)",
           "language": "Speech language",
-          "speak": "Read the question aloud",
+          "notify": "Announce a question or hint",
           "hints": "Announce permission prompts"
         }
+      }
+    }
+  },
+  "selector": {
+    "notify": {
+      "options": {
+        "speech": "Speech (chime and spoken text)",
+        "tone": "Tone only",
+        "none": "Nothing"
       }
     }
   },
@@ -35,6 +44,8 @@
     "get_overview": { "name": "Get overview", "description": "Every Claude session with its state, context and open questions, and the account's limits." },
     "get_question": { "name": "Get question", "description": "One open question by its handle: its parts and options, with their ids.", "fields": { "question": { "name": "Question", "description": "The question's handle (q7)." } } },
     "get_hint": { "name": "Get hint", "description": "What a session waits for on the PC.", "fields": { "session": { "name": "Session", "description": "The session's handle (s3)." } } },
-    "answer": { "name": "Answer", "description": "Answers an open question. Exactly one answer takes effect; the response says whether this one did.", "fields": { "question": { "name": "Question", "description": "The question's handle." }, "rev": { "name": "Revision", "description": "The rev get_question returned, so a stale question is not answered." }, "answers": { "name": "Answers", "description": "Option ids per part id: {\"p0\": [\"o1\"]}." }, "display": { "name": "Display", "description": "Who answers, for the log." } } }
+    "answer": { "name": "Answer", "description": "Answers an open question. Exactly one answer takes effect; the response says whether this one did.", "fields": { "question": { "name": "Question", "description": "The question's handle." }, "rev": { "name": "Revision", "description": "The rev get_question returned, so a stale question is not answered." }, "answers": { "name": "Answers", "description": "Option ids per part id: {\"p0\": [\"o1\"]}." }, "display": { "name": "Display", "description": "Who answers, for the log." } } },
+    "get_background": { "name": "Get background tasks", "description": "The background tasks of the running sessions, newest first, with their progress and note where a task reports one." },
+    "set_notify": { "name": "Set announcement", "description": "How a new question or hint is announced: speech (chime and spoken text), tone (the chime alone) or nothing. The display's bus events stay on.", "fields": { "mode": { "name": "Mode", "description": "speech, tone or none." } } }
   }
 }

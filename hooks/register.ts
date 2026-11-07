@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { backgroundStart, endedTasks, stoppedTask } from './background'
+import { backgroundStart, endedTasks, progressReport, runningTasks, stoppedTask } from './background'
 import { readConfig } from './ha'
 import type { Host } from './host'
 import { nonce, toToolAnswers, type ToolAnswers } from './questions'
@@ -57,6 +57,7 @@ export const register: Register = (on, options) => {
         cwd: () => $.session.cwd(),
         model: () => $.session.model(),
         usage: () => $.session.usage(),
+        agents: () => $.agent.list(),
       }
       const session = await bridge.session(host)
       await pushUsage(host, session)
@@ -77,8 +78,9 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A subagent's turn starts and ends here too (`agentId`): only the main loop's makes the session work.
   on('turn.start', async ($, e, next) => {
-    if (host) {
+    if (host && e.agentId === undefined) {
       const session = await bridge.session(host)
       session.working = true
       await session.refreshName(host)
@@ -96,8 +98,16 @@ export const register: Register = (on, options) => {
     await takeMode(e.permission_mode)
     return next(e)
   }).catch(($, e, next) => next(e))
+  // A background agent's step report moves its task's bar. The session is only looked up (`peek`): a subagent's loop
+  // must not start one. Two hooks hear the same report, as a hook above ours may keep the other from it; twice is harmless.
+  const takeProgress = (tool: string, input: unknown, agentId: unknown) => {
+    const progress = progressReport(tool, input)
+    if (!host || !progress || typeof agentId !== 'string' || !agentId) return
+    if (bridge.peek()?.progressTask(agentId, progress)) host.log(`tessera-bridge: progress of ${agentId} ${progress.done}/${progress.total}`)
+  }
   on('classic.PostToolUse', async ($, e, next) => {
     await takeMode(e.permission_mode)
+    takeProgress(e.tool_name, e.tool_input, e.agent_id)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -204,6 +214,7 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     const h = host
     if (h && e.tool_use_id !== undefined) bridge.peek()?.settleAsk(e.tool_use_id)
+    if (ran.result !== undefined && ran.isError !== true) takeProgress(e.tool, e, (e as { agentId?: string }).agentId)
     if (h && ran.result !== undefined && ran.isError !== true) {
       const started = backgroundStart(e.tool, e, ran.result)
       const stopped = stoppedTask(e.tool, e, ran.result)
@@ -225,9 +236,22 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The end of the main turn names the background work still in flight: a task it named before and names no more is
+  // over, whether or not its notification came our way.
+  on('classic.Stop', async ($, e, next) => {
+    const running = runningTasks(e.background_tasks)
+    if (host && running) bridge.peek()?.sweepTasks('stop', running)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
-    // The turn ended, or was aborted: only this session's questions and hints are over.
-    if (host) {
+    if (host && e.agentId !== undefined) {
+      // A subagent's turn may end while it waits or resumes under the same id: its task ends only when the engine's
+      // agent list says it is over (or drops it); otherwise the tick's sweep does it later. The main loop's questions
+      // and hints are not this turn's.
+      await bridge.peek()?.sweepAgents(host, e.agentId)
+    } else if (host) {
+      // The turn ended, or was aborted: only this session's questions and hints are over.
       const session = await bridge.session(host)
       session.settleAll()
       await session.report(host)

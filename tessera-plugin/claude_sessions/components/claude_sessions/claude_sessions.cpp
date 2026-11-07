@@ -39,6 +39,11 @@ static constexpr uint8_t EVENT_RETRIES = 6;
 // The event's text and its counter arrive one after the other; a counter that moves this soon after the text is
 // the same event, later it is a new one with the same text (a second hint of the same session).
 static constexpr uint32_t EVENT_PAIR_MS = 3000;
+// The announcement modes of tessera_claude.set_notify, in the order of the settings row's words.
+static const char *const NOTIFY_MODES[] = {"speech", "tone", "none"};
+static constexpr int NOTIFY_COUNT = 3;
+// How long the row shows the mode a tap chose before the sensor's attribute has to agree.
+static constexpr uint32_t NOTIFY_PENDING_MS = 10000;
 
 // ---- Small helpers ----
 
@@ -864,16 +869,17 @@ class ActivityTile : public tessera::Tile {
     const std::string big = std::to_string(o.active);
     const bool wide = columns_ >= 2;
     const int top_room = rows_ >= 2 ? std::max(2 * body_h, bh_ / rows_ - head_) : bh_ - head_;
-    // The motion: at the right beside the words on a wide tile, above the number on a narrow one.
+    // The motion: the right half of a wide tile, under the head down to the bottom (the number, the words and the
+    // names keep the left half); above the number on a narrow one.
     int anim_w = 0, anim_h = 0;
     if (motion_.on() && wide) {
-      anim_w = std::min(bw_ / 3, top_room * 3 / 2);
+      anim_w = bw_ / 2 - gap_;
       if (anim_w < ui::px(28)) anim_w = 0;
     } else if (motion_.on()) {
       anim_h = top_room * 2 / 5;
       if (anim_h - gap_ / 2 < ui::px(18)) anim_h = 0;
     }
-    const int area = anim_w ? bw_ - anim_w - gap_ : bw_;  // what the number and the words keep
+    const int area = anim_w ? bw_ - anim_w - gap_ : bw_;  // what the number, the words and the names keep
     const int number_w = wide ? area * 2 / 5 : bw_;
     const int under = wide ? 0 : body_h;
     Font face = Font::BODY_LARGE;
@@ -912,9 +918,8 @@ class ActivityTile : public tessera::Tile {
       ui::set_text(of_, of);
       ink(of_, Tone::NORMAL, theme::MUTED);
       bottom = top + block_h + gap_;
-      // Two rows high, the names start under the words: the motion ends with them.
-      const int anim_end = rows_ >= 2 ? top + block_h : head_ + top_room - gap_ / 2;
-      motion_.place(bw_ - anim_w, head_ + gap_ / 2, anim_w, anim_end - head_ - gap_ / 2);
+      // The right half, all the way down: two rows high the names stay at the left beside it.
+      motion_.place(bw_ - anim_w, head_ + gap_ / 2, anim_w, bh_ - head_ - gap_ / 2);
     } else {
       // Under the motion the number, and under it one word of state.
       motion_.place(0, head_ + gap_ / 2, bw_, anim_h - gap_ / 2);
@@ -943,18 +948,18 @@ class ActivityTile : public tessera::Tile {
       if (shown >= MAX_TILE_ROWS || y + body_h > bh_) break;
       if (!is_active(row.state)) continue;
       const std::string state = state_word(plugin_, row.state);
-      const int state_w = std::min(bw_ / 2, ui::text_width(state, Font::BODY) + ui::px(4));
+      const int state_w = std::min(area / 2, ui::text_width(state, Font::BODY) + ui::px(4));
       lv_obj_t *name = row_name_[shown], *word = row_state_[shown];
       hide(name, false);
       hide(word, false);
       lv_obj_set_size(word, state_w, body_h);
-      lv_obj_set_pos(word, bw_ - state_w, y);
+      lv_obj_set_pos(word, area - state_w, y);
       ui::set_text(word, state);
       const Tone row_tone = !std::strcmp(row.state, "ask")    ? Tone::ALERT
                             : !std::strcmp(row.state, "perm") ? Tone::BUSY
                                                               : Tone::NORMAL;
       ink(word, row_tone, theme::MUTED);
-      lv_obj_set_size(name, std::max(1, bw_ - state_w - ui::px(6)), body_h);
+      lv_obj_set_size(name, std::max(1, area - state_w - ui::px(6)), body_h);
       lv_obj_set_pos(name, 0, y);
       ui::set_text(name, row.name);
       ink(name, Tone::NORMAL, theme::INK_SOFT);
@@ -986,6 +991,15 @@ class ActivityTile : public tessera::Tile {
 static constexpr uint32_t ICON_GAUGE = 0xF029A;  // gauge
 static constexpr int MAX_LIMIT_ROWS = 4;
 
+// Which windows the tile shows (its option "window"): both bars and the model windows, or one window alone, large.
+enum class LimitWindow : uint8_t { BOTH, FIVE, WEEK };
+
+static LimitWindow limit_window(const char *value) {
+  if (value && !std::strcmp(value, "five")) return LimitWindow::FIVE;
+  if (value && !std::strcmp(value, "week")) return LimitWindow::WEEK;
+  return LimitWindow::BOTH;
+}
+
 class LimitsTile : public tessera::Tile {
  public:
   explicit LimitsTile(ClaudeSessions *plugin) : plugin_(plugin) {}
@@ -996,6 +1010,7 @@ class LimitsTile : public tessera::Tile {
     entity_ = c.entity ? c.entity : "";
     tile_ = c.tile;
     name_ = c.name && *c.name ? c.name : plugin_->text("limits_title");
+    window_ = limit_window(c.options["window"] | "both");
     const bool large = ui::large();
     gap_ = ui::px(large ? 6 : 4);
     bar_h_ = std::max(4, ui::px(large ? 10 : 7));
@@ -1007,7 +1022,9 @@ class LimitsTile : public tessera::Tile {
       Row &r = row_[i];
       r.name = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
       r.pct = ui::label(c.parent, Font::TITLE, theme::INK);
-      lv_obj_set_style_text_align(r.pct, LV_TEXT_ALIGN_RIGHT, 0);
+      // One window alone: its percent stands large at the left, as a meter tile's value does.
+      lv_obj_set_style_text_align(r.pct, window_ != LimitWindow::BOTH && i == 0 ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT,
+                                  0);
       r.track = ui::block(c.parent, theme::TRACK);
       r.fill = ui::block(r.track, theme::ACCENT);
       r.pace = ui::block(c.parent, theme::INK);
@@ -1017,6 +1034,10 @@ class LimitsTile : public tessera::Tile {
         lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
       }
     }
+    // The reset in the head's top right corner, for one window alone.
+    corner_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    lv_obj_set_style_text_align(corner_, LV_TEXT_ALIGN_RIGHT, 0);
+    hide(corner_, true);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -1057,8 +1078,52 @@ class LimitsTile : public tessera::Tile {
     lv_obj_t *name{}, *pct{}, *track{}, *fill{}, *pace{}, *reset{};
   };
 
+  struct Window {
+    std::string name;
+    int pct;
+    uint32_t at, span;
+  };
+
   // The colour of a fill: the accent, amber from 70 %, red from 90 %.
   static Tone fill_tone(int percent) { return percent >= 90 ? Tone::ALERT : percent >= 70 ? Tone::BUSY : Tone::NORMAL; }
+
+  // Whether the clock knows when the window starts anew.
+  static bool timed(const Window &w, uint32_t epoch) {
+    return w.span && w.at && epoch && w.at > epoch && w.at - epoch <= w.span;
+  }
+
+  // The number stays ink (amber text reads poorly on a light theme); red only near the end.
+  static void ink_percent(lv_obj_t *label, int percent) {
+    if (percent < 0) ui::set_color(label, theme::MUTED);
+    else if (percent >= 90) ui::set_tone(label, Tone::ALERT, theme::INK);
+    else ui::set_color(label, theme::INK);
+  }
+
+  // The bar, and the even pace: how much of the window has passed, so a fill beyond the mark spends ahead.
+  void paint_bar(Row &r, const Window &w, int bar_y, uint32_t epoch) {
+    hide(r.track, false);
+    lv_obj_set_pos(r.track, 0, bar_y);
+    lv_obj_set_size(r.track, width_, bar_h_);
+    ui::set_fill(r.track, Tone::NORMAL, theme::TRACK);
+    const int fill_w = w.pct > 0 ? std::max(bar_h_, width_ * std::min(w.pct, 100) / 100) : 0;
+    hide(r.fill, fill_w == 0);
+    if (fill_w) {
+      lv_obj_set_pos(r.fill, 0, 0);
+      lv_obj_set_size(r.fill, fill_w, bar_h_);
+      ui::set_fill(r.fill, fill_tone(w.pct), theme::ACCENT);
+    }
+    const bool shown = timed(w, epoch);
+    hide(r.pace, !shown);
+    if (shown) {
+      const uint32_t passed = w.span - (w.at - epoch);
+      const int mark_w = std::max(2, ui::px(3)), over = std::max(2, ui::px(3));
+      const int x = static_cast<int>(static_cast<uint64_t>(width_ - mark_w) * passed / w.span);
+      lv_obj_set_pos(r.pace, x, bar_y - over);
+      lv_obj_set_size(r.pace, mark_w, bar_h_ + 2 * over);
+      ui::set_fill(r.pace, Tone::NORMAL, theme::INK);
+      lv_obj_move_foreground(r.pace);
+    }
+  }
 
   void paint(uint32_t epoch) {
     painted_minute_ = epoch / 60;
@@ -1073,6 +1138,7 @@ class LimitsTile : public tessera::Tile {
     lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
     lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
     lv_obj_set_width(title_, std::max(1, width_ - icon_w));
+    hide(corner_, true);
 
     for (Row &r : row_)
       for (lv_obj_t *o : {r.name, r.pct, r.track, r.pace, r.reset}) hide(o, true);
@@ -1087,17 +1153,16 @@ class LimitsTile : public tessera::Tile {
     hide(note_, true);
 
     // The windows: five hours and the week always, then the model windows the sessions reported.
-    struct Window {
-      std::string name;
-      int pct;
-      uint32_t at, span;
-    };
     Window win[MAX_LIMIT_ROWS];
     int n = 0;
     win[n++] = {plugin_->text("limit_5h"), l5h_, l5h_at_, 5 * 3600};
     win[n++] = {plugin_->text("limit_week"), lwk_, lwk_at_, 7 * 86400};
     for (int i = 0; i < extra_ && n < MAX_LIMIT_ROWS; ++i)
       win[n++] = {tessera::fill(plugin_->text("limit_model"), "n", extra_name_[i]), extra_pct_[i], 0, 0};
+    if (window_ != LimitWindow::BOTH) {
+      paint_single(win[window_ == LimitWindow::FIVE ? 0 : 1], epoch);
+      return;
+    }
 
     // As many as the tile holds; with the reset under each bar when there is room for it.
     const int body_h = ui::line_height(Font::BODY), line_h = std::max(body_h, ui::line_height(Font::TITLE));
@@ -1111,49 +1176,24 @@ class LimitsTile : public tessera::Tile {
       const Window &w = win[i];
       Row &r = row_[i];
       const int y = head_ + gap_ + i * step + (step - row_h) / 2;
-      const Tone tone = fill_tone(w.pct);
       // The name at the left, the percent at the right, on one line.
       const std::string pct = percent_word(plugin_, w.pct);
       const int pct_w = std::min(width_ / 2, ui::text_width(pct, Font::TITLE) + ui::px(2));
       hide(r.name, false);
       hide(r.pct, false);
+      ui::set_font(r.pct, Font::TITLE);
       lv_obj_set_size(r.pct, pct_w, line_h);
       lv_obj_set_pos(r.pct, width_ - pct_w, y);
       ui::set_text(r.pct, pct);
-      // The number stays ink (amber text reads poorly on a light theme); red only near the end.
-      if (w.pct < 0) ui::set_color(r.pct, theme::MUTED);
-      else if (w.pct >= 90) ui::set_tone(r.pct, Tone::ALERT, theme::INK);
-      else ui::set_color(r.pct, theme::INK);
+      ink_percent(r.pct, w.pct);
       lv_obj_set_size(r.name, std::max(1, width_ - pct_w - ui::px(4)), body_h);
       lv_obj_set_pos(r.name, 0, y + (line_h - body_h) / 2);
       ui::set_text(r.name, w.name);
       ui::set_color(r.name, theme::INK_SOFT);
-      // The bar, and the even pace: how much of the window has passed, so a fill beyond the mark spends ahead.
       const int bar_y = y + line_h + gap_ / 2;
-      hide(r.track, false);
-      lv_obj_set_pos(r.track, 0, bar_y);
-      lv_obj_set_size(r.track, width_, bar_h_);
-      ui::set_fill(r.track, Tone::NORMAL, theme::TRACK);
-      const int fill_w = w.pct > 0 ? std::max(bar_h_, width_ * std::min(w.pct, 100) / 100) : 0;
-      hide(r.fill, fill_w == 0);
-      if (fill_w) {
-        lv_obj_set_pos(r.fill, 0, 0);
-        lv_obj_set_size(r.fill, fill_w, bar_h_);
-        ui::set_fill(r.fill, tone, theme::ACCENT);
-      }
-      const bool timed = w.span && w.at && epoch && w.at > epoch && w.at - epoch <= w.span;
-      hide(r.pace, !timed);
-      if (timed) {
-        const uint32_t passed = w.span - (w.at - epoch);
-        const int mark_w = std::max(2, ui::px(3)), over = std::max(2, ui::px(3));
-        const int x = static_cast<int>(static_cast<uint64_t>(width_ - mark_w) * passed / w.span);
-        lv_obj_set_pos(r.pace, x, bar_y - over);
-        lv_obj_set_size(r.pace, mark_w, bar_h_ + 2 * over);
-        ui::set_fill(r.pace, Tone::NORMAL, theme::INK);
-        lv_obj_move_foreground(r.pace);
-      }
+      paint_bar(r, w, bar_y, epoch);
       // Under the bar: when the window starts anew.
-      if (with_reset && timed) {
+      if (with_reset && timed(w, epoch)) {
         hide(r.reset, false);
         lv_obj_set_size(r.reset, width_, body_h);
         lv_obj_set_pos(r.reset, 0, bar_y + bar_h_ + gap_ / 2);
@@ -1163,15 +1203,101 @@ class LimitsTile : public tessera::Tile {
     }
   }
 
+  // One window alone, as Tessera's meter tile draws a value: the head with the reset in its top right corner, the
+  // percent large, the window's name small under it, the bar with the pace mark at the foot.
+  void paint_single(const Window &w, uint32_t epoch) {
+    Row &r = row_[0];
+    const int body_h = ui::line_height(Font::BODY);
+    const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
+    ui::set_tone(icon_, w.pct >= 70 ? fill_tone(w.pct) : Tone::NORMAL, theme::MUTED);
+
+    // The reset: in the head's corner when it fits beside the icon and the name (the name may give up its end, down
+    // to a few letters), else under the bar.
+    const bool has_reset = timed(w, epoch);
+    const std::string reset =
+        has_reset ? tessera::fill(plugin_->text("reset_in"), "n", span_word(plugin_, w.at - epoch)) : std::string();
+    const int title_w = ui::text_width(roomy::plain(name_), Font::TITLE) + ui::px(2);
+    const int corner_w = has_reset ? ui::text_width(reset, Font::BODY) + ui::px(2) : 0;
+    const bool corner = has_reset && icon_w + std::min(title_w, ui::px(56)) + gap_ + corner_w <= width_;
+    bool under = has_reset && !corner;
+    hide(corner_, !corner);
+    if (corner) {
+      lv_obj_set_size(corner_, corner_w, body_h);
+      lv_obj_set_pos(corner_, width_ - corner_w, (head_ - body_h) / 2);
+      ui::set_text(corner_, reset);
+      ui::set_color(corner_, theme::MUTED);
+      lv_obj_set_width(title_, std::max(1, std::min(title_w, width_ - icon_w - gap_ - corner_w)));
+    }
+
+    // The room between the head and the bar (the pace mark stands out over and under the bar).
+    const int over = std::max(2, ui::px(3));
+    const int top = head_ + gap_ / 2;
+    auto room_for = [&](bool with_reset) {
+      const int foot = height_ - (with_reset ? body_h + gap_ / 2 : 0);
+      return foot - bar_h_ - 2 * over - gap_ / 2 - top;
+    };
+    int room = room_for(under);
+    // A tile too low for the percent and the reset under the bar keeps the percent.
+    if (under && room < ui::line_height(Font::BODY_LARGE)) {
+      under = false;
+      room = room_for(false);
+    }
+    const int bottom = height_ - (under ? body_h + gap_ / 2 : 0);
+    const int bar_y = bottom - over - bar_h_;
+
+    // The percent: the largest font that fits with the name under it; on the smallest the name stands beside it.
+    const std::string pct = percent_word(plugin_, w.pct);
+    Font face = Font::BODY_LARGE;
+    bool name_under = false;
+    for (Font f : {Font::DIGITS, Font::VALUE, Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
+      if (f == Font::DIGITS && !ui::covers(pct, f)) continue;
+      if (ui::text_width(pct, f) <= width_ && ui::line_height(f) + body_h <= room) {
+        face = f;
+        name_under = true;
+        break;
+      }
+    }
+    const int big_h = ui::line_height(face);
+    const int block_h = name_under ? big_h + body_h : big_h;
+    const int y = top + std::max(0, (room - block_h) / 2);
+    const int pct_w = std::min(width_, ui::text_width(pct, face) + ui::px(4));
+    hide(r.pct, false);
+    ui::set_font(r.pct, face);
+    lv_obj_set_size(r.pct, pct_w, big_h);
+    lv_obj_set_pos(r.pct, 0, y);
+    ui::set_text(r.pct, pct);
+    ink_percent(r.pct, w.pct);
+    // The window's name: under the percent, or beside it at its foot when the tile is low.
+    const int name_x = name_under ? 0 : pct_w + ui::px(4);
+    const bool name_fits = width_ - name_x >= ui::px(24);
+    hide(r.name, !name_fits);
+    if (name_fits) {
+      lv_obj_set_size(r.name, width_ - name_x, body_h);
+      lv_obj_set_pos(r.name, name_x, name_under ? y + big_h : y + big_h - body_h);
+      ui::set_text(r.name, w.name);
+      ui::set_color(r.name, theme::INK_SOFT);
+    }
+
+    paint_bar(r, w, bar_y, epoch);
+    if (under) {
+      hide(r.reset, false);
+      lv_obj_set_size(r.reset, width_, body_h);
+      lv_obj_set_pos(r.reset, 0, bottom + gap_ / 2);
+      ui::set_text(r.reset, reset);
+      ui::set_color(r.reset, theme::MUTED);
+    }
+  }
+
   ClaudeSessions *plugin_;
   tessera::Text entity_, name_, wait_;
+  LimitWindow window_ = LimitWindow::BOTH;
   int width_ = 0, height_ = 0, tile_ = -1, head_ = 0, gap_ = 0, bar_h_ = 6;
   int l5h_ = -1, lwk_ = -1, extra_ = 0;
   int extra_pct_[MAX_LIMIT_ROWS]{};
   char extra_name_[MAX_LIMIT_ROWS][20]{};
   uint32_t l5h_at_ = 0, lwk_at_ = 0, painted_minute_ = 0;
   bool has_entity_ = false, valid_ = false;
-  lv_obj_t *icon_{}, *title_{}, *note_{};
+  lv_obj_t *icon_{}, *title_{}, *note_{}, *corner_{};
   Row row_[MAX_LIMIT_ROWS];
 };
 
@@ -1185,6 +1311,101 @@ static uint32_t kind_icon(const char *kind) {
   return ICON_SHELL;
 }
 
+// A task runs long: the accent in its first hour, amber from one hour, red from four.
+static Tone age_tone(const BackgroundRow &row, uint32_t epoch) {
+  if (!row.at || !epoch || epoch < row.at) return Tone::ACCENT;
+  const uint32_t age = epoch - row.at;
+  return age >= 4 * 3600 ? Tone::ALERT : age >= 3600 ? Tone::BUSY : Tone::ACCENT;
+}
+
+static bool has_progress(const BackgroundRow &row) { return row.total > 0 && row.done >= 0 && row.done <= row.total; }
+
+// What is left of a task, in thousandths: by the steps it reported, else by its age against eight hours. Never less
+// than a sliver while it runs.
+static int remaining_share_pm(const BackgroundRow &row, uint32_t epoch) {
+  static constexpr uint32_t AGE_SPAN = 8 * 3600;
+  int pm = 1000;
+  if (has_progress(row)) {
+    pm = (row.total - row.done) * 1000 / row.total;
+  } else if (row.at && epoch >= row.at) {
+    pm = 1000 - static_cast<int>(std::min<uint32_t>(epoch - row.at, AGE_SPAN) * 1000 / AGE_SPAN);
+  }
+  return std::max(60, std::min(1000, pm));
+}
+
+// A bar of two blocks made in create()/open(): the track, the fill inside it as long as `pm` of it, in the tone.
+static void paint_bar(lv_obj_t *track, lv_obj_t *fill, int x, int y, int w, int h, int pm, Tone tone) {
+  w = std::max(1, w);
+  hide(track, false);
+  lv_obj_set_pos(track, x, y);
+  lv_obj_set_size(track, w, h);
+  ui::set_fill(track, Tone::NORMAL, theme::TRACK);
+  hide(fill, false);
+  lv_obj_set_pos(fill, 0, 0);
+  lv_obj_set_size(fill, std::min(w, std::max(h, w * pm / 1000)), h);
+  ui::set_fill(fill, tone, theme::ACCENT);
+}
+
+static lv_obj_t *bar_block(lv_obj_t *parent, theme::Role role) {
+  lv_obj_t *o = ui::block(parent, role);
+  lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
+  return o;
+}
+
+// "a/b" when the task reported steps, else "" .
+static std::string progress_word(const tessera::Plugin *plugin, const BackgroundRow &row) {
+  if (!has_progress(row)) return "";
+  return tessera::fill(tessera::fill(plugin->text("background_done"), "a", std::to_string(row.done)).c_str(), "b",
+                       std::to_string(row.total));
+}
+
+// Steps are known only when the numbers make sense: at least one step, and no more done than there are.
+static void sane(BackgroundRow &row) {
+  if (row.total < 1 || row.done < 0 || row.done > row.total) {
+    row.done = -1;
+    row.total = 0;
+  }
+}
+
+// The rows of the background sensor: its parallel lists, with the steps from the mod (-1 and 0 where unknown).
+static void parse_background(tessera::List<BackgroundRow> &tasks, JsonObjectConst a) {
+  tasks.clear();
+  JsonArrayConst titles = a["bg_titles"], kinds = a["bg_kinds"], sess = a["bg_sess"], hm = a["bg_hm"];
+  JsonArrayConst at = a["bg_at"], done = a["bg_done"], total = a["bg_total"];
+  for (size_t i = 0; i < titles.size() && i < static_cast<size_t>(MAX_TASK_ROWS); ++i) {
+    BackgroundRow row;
+    copy(row.title, titles[i] | "");
+    copy(row.kind, i < kinds.size() ? (kinds[i] | "shell") : "shell");
+    copy(row.sess, i < sess.size() ? (sess[i] | "") : "");
+    copy(row.hm, i < hm.size() ? (hm[i] | "") : "");
+    row.at = i < at.size() ? (at[i] | 0u) : 0u;
+    row.done = i < done.size() ? (done[i] | -1) : -1;
+    row.total = i < total.size() ? (total[i] | 0) : 0;
+    sane(row);
+    tasks.push_back(row);
+  }
+}
+
+// The answer of get_background: the same rows as objects, with the note the task last gave.
+static void parse_background_result(tessera::List<BackgroundRow> &tasks, JsonObjectConst result) {
+  tasks.clear();
+  for (JsonObjectConst t : result["tasks"].as<JsonArrayConst>()) {
+    if (tasks.size() >= static_cast<size_t>(MAX_TASK_ROWS)) break;
+    BackgroundRow row;
+    copy(row.title, t["title"] | "");
+    copy(row.kind, t["kind"] | "shell");
+    copy(row.sess, t["session"] | "");
+    copy(row.hm, t["hm"] | "");
+    copy(row.note, t["note"] | "");
+    row.at = t["at"] | 0u;
+    row.done = t["done"] | -1;
+    row.total = t["total"] | 0;
+    sane(row);
+    tasks.push_back(row);
+  }
+}
+
 class BackgroundTile : public tessera::Tile {
  public:
   explicit BackgroundTile(ClaudeSessions *plugin) : plugin_(plugin) {}
@@ -1194,9 +1415,12 @@ class BackgroundTile : public tessera::Tile {
     height_ = c.height;
     columns_ = c.columns;
     rows_ = c.rows;
+    entity_ = c.entity ? c.entity : "";
+    tile_ = c.tile;
     name_ = c.name && *c.name ? c.name : plugin_->text("background_title");
     const bool large = ui::large();
     gap_ = ui::px(large ? 6 : 4);
+    bar_h_ = std::max(3, ui::px(large ? 6 : 4));
     // The head: the icon, the name, and at the right the badge with the number of tasks.
     icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
     title_ = ui::label(c.parent, Font::TITLE, theme::INK);
@@ -1215,6 +1439,9 @@ class BackgroundTile : public tessera::Tile {
       row_title_[i] = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
       row_when_[i] = ui::label(c.parent, Font::BODY, theme::MUTED);
       lv_obj_set_style_text_align(row_when_[i], LV_TEXT_ALIGN_RIGHT, 0);
+      // Under each task: what is left of it.
+      row_track_[i] = bar_block(c.parent, theme::TRACK);
+      row_fill_[i] = bar_block(row_track_[i], theme::ACCENT);
     }
   }
 
@@ -1223,18 +1450,7 @@ class BackgroundTile : public tessera::Tile {
     has_entity_ = !data["state"].isNull();
     JsonObjectConst a = data["attributes"];
     if (has_entity_ && !a.isNull() && !a["bg_titles"].isNull()) {
-      tasks_.clear();
-      JsonArrayConst titles = a["bg_titles"], kinds = a["bg_kinds"], sess = a["bg_sess"], hm = a["bg_hm"];
-      JsonArrayConst at = a["bg_at"];
-      for (size_t i = 0; i < titles.size(); ++i) {
-        BackgroundRow row;
-        copy(row.title, titles[i] | "");
-        copy(row.kind, i < kinds.size() ? (kinds[i] | "shell") : "shell");
-        copy(row.sess, i < sess.size() ? (sess[i] | "") : "");
-        copy(row.hm, i < hm.size() ? (hm[i] | "") : "");
-        row.at = i < at.size() ? (at[i] | 0u) : 0u;
-        tasks_.push_back(row);
-      }
+      parse_background(tasks_, a);
       count_ = std::atoi(data["state"] | "0");
       valid_ = true;
       ESP_LOGD(TAG, "Background data: %d tasks", count_);
@@ -1248,6 +1464,9 @@ class BackgroundTile : public tessera::Tile {
   }
 
   void on_theme() override { paint(tessera::epoch()); }
+
+  // The background card: every task with its steps and its note.
+  void on_tap() override { tessera::open_card(plugin_->plugin_id(), "background", roomy::plain(entity_), tile_); }
 
  private:
   void paint(uint32_t epoch) {
@@ -1280,6 +1499,7 @@ class BackgroundTile : public tessera::Tile {
       hide(row_icon_[i], true);
       hide(row_title_[i], true);
       hide(row_when_[i], true);
+      hide(row_track_[i], true);
     }
     const int body_h = ui::line_height(Font::BODY);
     if (!busy) {
@@ -1327,20 +1547,23 @@ class BackgroundTile : public tessera::Tile {
       return;
     }
 
-    // A list: per task its kind, its title, and at the right when it started and, where there is room, for how long.
+    // A list: per task its kind, its title, and at the right when it started and, where there is room, for how long
+    // (or how many of its steps are done); under it a bar of what is left, coloured by its age.
     hide(big_, true);
     hide(note_, true);
     const int icon_h = ui::line_height(Font::ICON_SMALL);
     const int line_h = std::max(body_h, icon_h);
-    const int step = line_h + gap_ / 2;
+    const int bar_gap = std::max(1, gap_ / 2);
+    const int row_h = line_h + bar_gap + bar_h_;
+    const int step = row_h + std::max(1, gap_ / 2);
     const bool roomy_row = columns_ >= 2;
     const int total = static_cast<int>(tasks_.size());
     int y = head_ + gap_, shown = 0;
     for (const BackgroundRow &row : tasks_) {
-      if (shown >= MAX_TASK_ROWS || y + line_h > height_) break;
+      if (shown >= MAX_TASK_ROWS || y + row_h > height_) break;
       // The last line that fits says how many more there are, when more than it would show.
       const int more = total - shown;
-      if (more > 1 && (y + line_h + step > height_ || shown == MAX_TASK_ROWS - 1)) {
+      if (more > 1 && shown > 0 && (y + step + row_h > height_ || shown == MAX_TASK_ROWS - 1)) {
         lv_obj_t *title = row_title_[shown];
         hide(title, false);
         lv_obj_set_size(title, width_, body_h);
@@ -1349,8 +1572,13 @@ class BackgroundTile : public tessera::Tile {
         ui::set_text(title, tessera::format(plugin_->text("background_more"), more));
         break;
       }
-      std::string when = row.hm;
-      if (roomy_row && row.at && epoch >= row.at) {
+      // At the right: "14:05 · 2/5" with steps, else "14:05 · 12 min"; one column wide only "2/5" or "14:05".
+      const std::string done = progress_word(plugin_, row);
+      std::string when = roomy_row || done.empty() ? row.hm : "";
+      if (!done.empty()) {
+        if (!when.empty()) when += " · ";
+        when += done;
+      } else if (roomy_row && row.at && epoch >= row.at) {
         if (!when.empty()) when += " · ";
         when += span_word(plugin_, epoch - row.at);
       }
@@ -1370,19 +1598,23 @@ class BackgroundTile : public tessera::Tile {
       lv_obj_set_pos(title, icon_w, y + (line_h - body_h) / 2);
       ui::set_text(title, row.title);
       ui::set_color(title, theme::INK_SOFT);
+      paint_bar(row_track_[shown], row_fill_[shown], icon_w, y + line_h + bar_gap, width_ - icon_w, bar_h_,
+                remaining_share_pm(row, epoch), age_tone(row, epoch));
       y += step;
       shown += 1;
     }
   }
 
   ClaudeSessions *plugin_;
-  tessera::Text name_, wait_;
+  tessera::Text entity_, name_, wait_;
   tessera::List<BackgroundRow> tasks_;
-  int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, head_ = 0, gap_ = 0, badge_h_ = 0, count_ = 0;
+  int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0, count_ = 0;
+  int bar_h_ = 4;
   bool has_entity_ = false, valid_ = false;
   uint32_t painted_minute_ = 0;
   lv_obj_t *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *note_{};
   lv_obj_t *row_icon_[MAX_TASK_ROWS]{}, *row_title_[MAX_TASK_ROWS]{}, *row_when_[MAX_TASK_ROWS]{};
+  lv_obj_t *row_track_[MAX_TASK_ROWS]{}, *row_fill_[MAX_TASK_ROWS]{};
 };
 
 // ---- The sessions card: every session, a page at a time; a tap on one with a question opens it ----
@@ -1553,6 +1785,192 @@ class SessionsCard : public tessera::Card {
   lv_obj_t *row_badge_[MAX_PAGE_ROWS]{}, *row_badge_text_[MAX_PAGE_ROWS]{};
   int width_ = 0, height_ = 0, gap_ = 0, line1_ = 0, line2_ = 0, row_h_ = 0, footer_h_ = 0;
   int per_page_ = 1, pages_ = 1, page_index_ = 0;
+};
+
+// ---- The background card: every task that runs, with its session, since when, its steps and the note it gave ----
+
+static constexpr int MAX_BG_PAGE_ROWS = 4;
+
+class BackgroundCard : public tessera::Card {
+ public:
+  explicit BackgroundCard(ClaudeSessions *plugin) : plugin_(plugin) {}
+  ~BackgroundCard() override {
+    if (plugin_->background_card_ == this) plugin_->background_card_ = nullptr;
+  }
+
+  void open(const tessera::CardContext &c) override {
+    parent_ = c.parent;
+    width_ = c.width;
+    height_ = c.height;
+    const bool large = ui::large();
+    gap_ = ui::px(large ? 10 : 6);
+    pad_ = ui::px(large ? 10 : 6);
+    line1_ = std::max(ui::line_height(Font::BODY_LARGE), ui::line_height(Font::ICON_SMALL));
+    line2_ = ui::line_height(Font::BODY);
+    bar_h_ = std::max(3, ui::px(large ? 6 : 4));
+    bar_gap_ = ui::px(large ? 4 : 3);
+    // Per row: the head line, the session line, the bar, the steps line.
+    row_h_ = ui::px(2) + line1_ + line2_ + bar_gap_ + bar_h_ + bar_gap_ + line2_ + ui::px(large ? 6 : 4);
+    note_ = ui::label(parent_, Font::BODY_LARGE, theme::MUTED);
+    lv_obj_set_width(note_, width_);
+    ui::set_text(note_, plugin_->text("loading"));
+    for (int i = 0; i < MAX_BG_PAGE_ROWS; ++i) {
+      row_bg_[i] = ui::block(parent_, theme::CARD);
+      row_icon_[i] = ui::label(row_bg_[i], Font::ICON_SMALL, theme::MUTED);
+      row_title_[i] = ui::label(row_bg_[i], Font::BODY_LARGE, theme::INK);
+      row_line_[i] = ui::label(row_bg_[i], Font::BODY, theme::MUTED);
+      row_track_[i] = bar_block(row_bg_[i], theme::TRACK);
+      row_fill_[i] = bar_block(row_track_[i], theme::ACCENT);
+      row_step_[i] = ui::label(row_bg_[i], Font::BODY, theme::INK_SOFT);
+    }
+    // The footer: back, the page, next.
+    const int key = std::max(ui::mm(9), ui::line_height(Font::ICON_SMALL));
+    footer_h_ = key;
+    prev_ = ui::label(parent_, Font::ICON_SMALL, theme::INK);
+    next_ = ui::label(parent_, Font::ICON_SMALL, theme::INK);
+    ui::set_text(prev_, ui::icon(ICON_PREV));
+    ui::set_text(next_, ui::icon(ICON_NEXT));
+    lv_obj_set_size(prev_, key * 2, key);
+    lv_obj_set_size(next_, key * 2, key);
+    lv_obj_set_style_text_align(prev_, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_align(next_, LV_TEXT_ALIGN_RIGHT, 0);
+    page_ = ui::label(parent_, Font::BODY, theme::MUTED);
+    lv_obj_set_width(page_, std::max(1, width_ - key * 4 - ui::px(8)));
+    lv_obj_set_style_text_align(page_, LV_TEXT_ALIGN_CENTER, 0);
+    plugin_->background_card_ = this;
+    plugin_->clear_background();  // a re-opened card shows no old notes while the new ones are on their way
+    paint(tessera::epoch());
+    // The rows with their notes come from the integration; the sensor alone has no notes.
+    plugin_->request_background();
+  }
+
+  // The tile's sensor changed: take its rows (keeping the notes); the hub then asks for the notes anew.
+  void on_state(JsonObjectConst data) override {
+    JsonObjectConst a = data["attributes"];
+    if (!data["state"].isNull() && !a.isNull() && !a["bg_titles"].isNull()) plugin_->take_background(a);
+    paint(tessera::epoch());
+  }
+
+  void on_tick(uint32_t epoch) override {
+    if (epoch / 60 != painted_minute_) paint(epoch);
+  }
+
+  void on_theme() override {
+    ui::set_color(note_, theme::MUTED);
+    ui::set_color(page_, theme::MUTED);
+    ui::set_color(prev_, theme::INK);
+    ui::set_color(next_, theme::INK);
+    for (int i = 0; i < MAX_BG_PAGE_ROWS; ++i) {
+      ui::set_color(row_title_[i], theme::INK);
+      ui::set_color(row_line_[i], theme::MUTED);
+    }
+    paint(tessera::epoch());
+  }
+
+  void on_tap() override {
+    const tessera::Point p = tessera::tap_point();
+    if (inside(prev_, parent_, p)) {
+      if (page_index_ > 0) {
+        page_index_ -= 1;
+        paint(tessera::epoch());
+      }
+      return;
+    }
+    if (inside(next_, parent_, p) && page_index_ + 1 < pages_) {
+      page_index_ += 1;
+      paint(tessera::epoch());
+    }
+  }
+
+  void paint(uint32_t epoch) {
+    painted_minute_ = epoch / 60;
+    const tessera::List<BackgroundRow> &tasks = plugin_->background();
+    const int footer_top = height_ - footer_h_;
+    const int list_bottom = footer_top - gap_ / 2;
+    per_page_ = std::max(1, std::min(MAX_BG_PAGE_ROWS, (list_bottom + gap_) / (row_h_ + gap_)));
+    const int total = static_cast<int>(tasks.size());
+    pages_ = std::max(1, (total + per_page_ - 1) / per_page_);
+    if (page_index_ >= pages_) page_index_ = pages_ - 1;
+    const bool paged = pages_ > 1;
+    hide(prev_, !paged);
+    hide(next_, !paged);
+    hide(page_, !paged);
+    lv_obj_set_pos(prev_, 0, footer_top);
+    lv_obj_set_pos(next_, width_ - footer_h_ * 2, footer_top);
+    lv_obj_set_pos(page_, footer_h_ * 2 + ui::px(4), footer_top + (footer_h_ - line2_) / 2);
+    if (paged) {
+      ui::set_text(page_, tessera::fill(tessera::fill(plugin_->text("page"), "a", std::to_string(page_index_ + 1)).c_str(),
+                                        "b", std::to_string(pages_)));
+    }
+    hide(note_, total > 0);
+    if (total == 0) ui::set_text(note_, plugin_->text(plugin_->background_valid() ? "background_none" : "loading"));
+    const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
+    const int inner = std::max(1, width_ - 2 * pad_);
+    int y = 0;
+    for (int i = 0; i < MAX_BG_PAGE_ROWS; ++i) {
+      const int index = page_index_ * per_page_ + i;
+      const bool show = i < per_page_ && index < total;
+      hide(row_bg_[i], !show);
+      if (!show) continue;
+      const BackgroundRow &row = tasks[index];
+      const Tone tone = age_tone(row, epoch);
+      lv_obj_set_size(row_bg_[i], width_, row_h_);
+      lv_obj_set_pos(row_bg_[i], 0, y);
+      int top = ui::px(2);
+      // The head: the kind, in the colour of its age, and the title.
+      ui::set_text(row_icon_[i], ui::icon(kind_icon(row.kind)));
+      ui::set_tone(row_icon_[i], tone, theme::MUTED);
+      lv_obj_set_pos(row_icon_[i], pad_, top + (line1_ - ui::line_height(Font::ICON_SMALL)) / 2);
+      lv_obj_set_size(row_title_[i], std::max(1, inner - icon_w), ui::line_height(Font::BODY_LARGE));
+      lv_obj_set_pos(row_title_[i], pad_ + icon_w, top + (line1_ - ui::line_height(Font::BODY_LARGE)) / 2);
+      ui::set_text(row_title_[i], row.title);
+      top += line1_;
+      // The session, since when, for how long.
+      std::string line = row.sess;
+      if (row.hm[0]) {
+        if (!line.empty()) line += " · ";
+        line += tessera::fill(plugin_->text("background_since"), "n", row.hm);
+      }
+      if (row.at && epoch >= row.at) {
+        if (!line.empty()) line += " · ";
+        line += span_word(plugin_, epoch - row.at);
+      }
+      lv_obj_set_size(row_line_[i], inner, line2_);
+      lv_obj_set_pos(row_line_[i], pad_, top);
+      ui::set_text(row_line_[i], line);
+      top += line2_ + bar_gap_;
+      // What is left of it, coloured by its age.
+      paint_bar(row_track_[i], row_fill_[i], pad_, top, inner, bar_h_, remaining_share_pm(row, epoch), tone);
+      top += bar_h_ + bar_gap_;
+      // The steps and the note, or that the task reports none.
+      std::string step;
+      if (has_progress(row)) {
+        step = tessera::fill(tessera::fill(plugin_->text("background_step"), "a", std::to_string(row.done)).c_str(), "b",
+                             std::to_string(row.total));
+      }
+      if (row.note[0]) {
+        if (!step.empty()) step += " · ";
+        step += row.note;
+      }
+      const bool quiet = step.empty();
+      if (quiet) step = plugin_->text("background_no_progress");
+      lv_obj_set_size(row_step_[i], inner, line2_);
+      lv_obj_set_pos(row_step_[i], pad_, top);
+      ui::set_text(row_step_[i], step);
+      ui::set_color(row_step_[i], quiet ? theme::MUTED : theme::INK_SOFT);
+      y += row_h_ + gap_;
+    }
+  }
+
+ private:
+  ClaudeSessions *plugin_;
+  lv_obj_t *parent_{}, *note_{}, *prev_{}, *next_{}, *page_{};
+  lv_obj_t *row_bg_[MAX_BG_PAGE_ROWS]{}, *row_icon_[MAX_BG_PAGE_ROWS]{}, *row_title_[MAX_BG_PAGE_ROWS]{};
+  lv_obj_t *row_line_[MAX_BG_PAGE_ROWS]{}, *row_track_[MAX_BG_PAGE_ROWS]{}, *row_fill_[MAX_BG_PAGE_ROWS]{};
+  lv_obj_t *row_step_[MAX_BG_PAGE_ROWS]{};
+  int width_ = 0, height_ = 0, gap_ = 0, pad_ = 0, line1_ = 0, line2_ = 0, bar_h_ = 4, bar_gap_ = 3, row_h_ = 0;
+  int footer_h_ = 0, per_page_ = 1, pages_ = 1, page_index_ = 0;
+  uint32_t painted_minute_ = 0;
 };
 
 // ---- The question card: one part at a time, its options as keys; the answer goes to the integration ----
@@ -1982,6 +2400,7 @@ void ClaudeSessions::setup() {
   add_tile("background", [this]() { return new BackgroundTile(this); });
   add_tile("limits", [this]() { return new LimitsTile(this); });
   add_card("sessions", [this]() { return new SessionsCard(this); });
+  add_card("background", [this]() { return new BackgroundCard(this); });
   add_card("question", [this]() { return new QuestionCard(this); });
   add_bar_item("asks", [this]() { return bar(); });
 }
@@ -2015,6 +2434,38 @@ void ClaudeSessions::request_overview() {
   asked_overview_ = ask("get_overview", data);
   last_overview_ms_ = millis();
   overview_due_ = false;
+}
+
+void ClaudeSessions::request_background() {
+  JsonDocument data;
+  data.to<JsonObject>();
+  asked_background_ = ask("get_background", data);
+  last_background_ms_ = millis();
+  background_due_ = false;
+}
+
+void ClaudeSessions::take_background(JsonObjectConst attributes) {
+  tessera::List<BackgroundRow> fresh;
+  parse_background(fresh, attributes);
+  // The sensor has no notes: a row that stays (same title, same start) keeps the one it had.
+  for (BackgroundRow &row : fresh) {
+    for (const BackgroundRow &old : background_) {
+      if (old.at == row.at && !std::strcmp(old.title, row.title)) {
+        copy(row.note, old.note);
+        break;
+      }
+    }
+  }
+  background_.swap(fresh);
+  background_valid_ = true;
+  // While the card is open, its notes come anew from the integration.
+  // (Not while the card's own request is still out: its answer brings the notes.)
+  if (background_card_ && !asked_background_) background_due_ = true;
+}
+
+void ClaudeSessions::clear_background() {
+  background_ = tessera::List<BackgroundRow>();
+  background_valid_ = false;
 }
 
 void ClaudeSessions::request_question(const char *handle) {
@@ -2073,6 +2524,55 @@ void ClaudeSessions::handle_event(const std::string &event) {
   send_event_request();
 }
 
+void ClaudeSessions::remember_event(const std::string &event) {
+  if (event.rfind("question:", 0) == 0) last_question_event_ = event;
+  else if (event.rfind("hint:", 0) == 0) last_hint_event_ = event;
+}
+
+void ClaudeSessions::popup_switch_changed(bool question, bool on) {
+  const char *prefix = question ? "question:" : "hint:";
+  ESP_LOGD(TAG, "%s popup switch %s", question ? "Question" : "Hint", on ? "on" : "off");
+  if (!on) {
+    // Off: a popup of this kind goes now, and a request still out for one opens nothing.
+    if (popup_shown_ && popup_.question == question) {
+      popup_shown_ = nullptr;
+      tessera::close_popup(this);
+    }
+    if (pending_event_.rfind(prefix, 0) == 0) {
+      pending_event_.clear();
+      pending_tries_ = 0;
+    }
+    return;
+  }
+  // On: the newest event of this kind is asked again; the registry's reply decides (an open question, a hint that
+  // still waits).
+  if (!event_seen_) return;
+  const std::string &event = question ? last_question_event_ : last_hint_event_;
+  if (event.empty()) return;
+  if (question && open_count() <= 0) return;
+  event_handled_ms_ = millis();
+  handle_event(event);
+}
+
+int ClaudeSessions::notify_index() const {
+  const char *mode = pending_notify_[0]                   ? pending_notify_
+                     : notify_ && notify_->has_state() ? notify_->state.c_str()
+                                                       : "";
+  for (int i = 0; i < NOTIFY_COUNT; ++i)
+    if (!std::strcmp(mode, NOTIFY_MODES[i])) return i;
+  return 0;  // an integration without the attribute announces by speech
+}
+
+void ClaudeSessions::request_notify(const char *mode) {
+  copy(pending_notify_, mode);
+  pending_notify_ms_ = millis();
+  JsonDocument data;
+  data["mode"] = mode;
+  asked_notify_ = ask("set_notify", data);
+  ESP_LOGD(TAG, "Notify %s sent (request %u)", mode, (unsigned) asked_notify_);
+  if (!asked_notify_) pending_notify_[0] = '\0';
+}
+
 void ClaudeSessions::send_event_request() {
   const size_t colon = pending_event_.find(':');
   const std::string kind = pending_event_.substr(0, colon), handle = pending_event_.substr(colon + 1);
@@ -2088,9 +2588,24 @@ void ClaudeSessions::send_event_request() {
 }
 
 void ClaudeSessions::on_interval(uint32_t now_ms) {
+  // The popup switches act at once, whether turned on the glass or in Home Assistant.
+  const bool question_on = question_popup_ && question_popup_->state;
+  const bool hint_on = hint_popup_ && hint_popup_->state;
+  const bool question_changed = popups_seen_ && question_on != question_popup_was_;
+  const bool hint_changed = popups_seen_ && hint_on != hint_popup_was_;
+  question_popup_was_ = question_on;
+  hint_popup_was_ = hint_on;
+  popups_seen_ = true;
+  if (question_changed) popup_switch_changed(true, question_on);
+  if (hint_changed) popup_switch_changed(false, hint_on);
+  // The chosen announcement shows until the sensor says the same, or for NOTIFY_PENDING_MS.
+  if (pending_notify_[0] && ((notify_ && notify_->has_state() && notify_->state == pending_notify_) ||
+                             now_ms - pending_notify_ms_ >= NOTIFY_PENDING_MS))
+    pending_notify_[0] = '\0';
   bool fresh = false;
   if (event_ && event_->has_state() && !roomy::same(event_->state, seen_event_)) {
     seen_event_ = roomy::text(event_->state);
+    remember_event(roomy::plain(seen_event_));
     event_seen_ = true;
     // The first value after a start is handled too: a question asked while the screen was off or away is still
     // open, and the registry's reply decides (a popup only for an open question, for a hint still waiting).
@@ -2117,6 +2632,8 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
   if (rev_ && rev_->has_state() && !roomy::same(rev_->state, seen_rev_)) {
     seen_rev_ = roomy::text(rev_->state);
     if (!first_rev_ && (sessions_card_ || question_card_ || popup_shown_)) overview_due_ = true;
+    // A report may bring a background task's new note without changing the sensor.
+    if (!first_rev_ && background_card_) background_due_ = true;
     first_rev_ = false;
   }
   if (overview_due_) {
@@ -2150,13 +2667,24 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
     }
     overview_due_ = pending;
   }
+  // The background card asks for its rows with notes again after the sensor changed, spaced like the overview.
+  if (background_due_ && background_card_ && now_ms - last_background_ms_ >= OVERVIEW_SPACING_MS) request_background();
+  if (!background_card_) background_due_ = false;
 }
 
 void ClaudeSessions::on_message(JsonObjectConst message) {
   const uint32_t re = message["re"] | 0u;
   const bool ok = message["ok"] | false;
   JsonObjectConst result = message["result"];
-  if (re && re == asked_overview_) {
+  if (re && re == asked_background_) {
+    asked_background_ = 0;
+    ESP_LOGD(TAG, "Background reply %u: ok %d, %u tasks", (unsigned) re, (int) ok, (unsigned) (result["tasks"].size()));
+    // An integration older than 0.2.5 does not know get_background: the card keeps the sensor's rows, without notes.
+    if (ok && !result.isNull() && !result["tasks"].isNull()) parse_background_result(background_, result);
+    background_valid_ = true;
+    if (background_card_) background_card_->paint(tessera::epoch());
+    tessera::refresh();
+  } else if (re && re == asked_overview_) {
     asked_overview_ = 0;
     ESP_LOGD(TAG, "Overview reply %u: ok %d, %u sessions", (unsigned) re, (int) ok, (unsigned) (result["sessions"].size()));
     if (ok && !result.isNull()) parse_overview(overview_, result);
@@ -2170,7 +2698,7 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
       parse_question(question_, result);
       if (question_for_popup_) {
         question_for_popup_ = false;
-        if (question_.valid && !std::strcmp(question_.status, "open")) {
+        if (question_.valid && !std::strcmp(question_.status, "open") && question_popup_ && question_popup_->state) {
           popup_.question = true;
           copy(popup_.handle, question_.h);
           copy(popup_.name, question_.name);
@@ -2187,7 +2715,7 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
     asked_hint_ = 0;
     pending_event_.clear();
     ESP_LOGD(TAG, "Hint reply %u: ok %d, %s %s", (unsigned) re, (int) ok, result["h"] | "", result["state"] | "");
-    if (ok && !result.isNull() && !std::strcmp(result["state"] | "", "perm")) {
+    if (ok && !result.isNull() && !std::strcmp(result["state"] | "", "perm") && hint_popup_ && hint_popup_->state) {
       popup_.question = false;
       copy(popup_.handle, result["h"] | "");
       copy(popup_.name, result["name"] | "");
@@ -2204,6 +2732,12 @@ void ClaudeSessions::on_message(JsonObjectConst message) {
       popup_shown_ = nullptr;
       tessera::close_popup(this);
     }
+  } else if (re && re == asked_notify_) {
+    asked_notify_ = 0;
+    ESP_LOGD(TAG, "Notify reply %u: ok %d, %s", (unsigned) re, (int) ok, result["notify"] | "");
+    // Refused (an older integration, no consent for the service): the row goes back to what the sensor says.
+    if (!ok || result.isNull()) pending_notify_[0] = '\0';
+    else if (pending_notify_[0] && result["notify"].is<const char *>()) copy(pending_notify_, result["notify"] | "");
   } else if (re && re == asked_answer_) {
     asked_answer_ = 0;
     ESP_LOGD(TAG, "Answer reply %u: ok %d, accepted %d, reason %s", (unsigned) re, (int) ok, (int) (result["accepted"] | false),
@@ -2225,6 +2759,10 @@ bool ClaudeSessions::settings(tessera::SettingsPage &page) {
               [this](bool on) { if (question_popup_) { if (on) question_popup_->turn_on(); else question_popup_->turn_off(); } });
   page.toggle(text("setting_hint_popup"), [this]() { return hint_popup_ && hint_popup_->state; },
               [this](bool on) { if (hint_popup_) { if (on) hint_popup_->turn_on(); else hint_popup_->turn_off(); } });
+  // The announcement lives in the integration (its options and tessera_claude.set_notify), one value for every screen.
+  page.choice(text("setting_notify"), {text("notify_speech"), text("notify_tone"), text("notify_none")},
+              [this]() { return notify_index(); },
+              [this](int index) { if (index >= 0 && index < NOTIFY_COUNT) request_notify(NOTIFY_MODES[index]); });
   page.info(text("setting_sessions"), [this]() -> std::string {
     const Overview &o = overview_;
     if (!o.valid) return text("limit_unknown");

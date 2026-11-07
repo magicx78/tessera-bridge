@@ -11,7 +11,18 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 
-from .const import DOMAIN, SERVICE_ANSWER, SERVICE_HINT, SERVICE_OVERVIEW, SERVICE_QUESTION
+from .const import (
+    CONF_NOTIFY,
+    DOMAIN,
+    NOTIFY_MODES,
+    SERVICE_ANSWER,
+    SERVICE_BACKGROUND,
+    SERVICE_HINT,
+    SERVICE_NOTIFY,
+    SERVICE_OVERVIEW,
+    SERVICE_QUESTION,
+)
+from .sensor import background_rows
 
 ANSWER_SCHEMA = vol.Schema(
     {
@@ -24,6 +35,7 @@ ANSWER_SCHEMA = vol.Schema(
 )
 QUESTION_SCHEMA = vol.Schema({vol.Required("question"): str}, extra=vol.ALLOW_EXTRA)
 HINT_SCHEMA = vol.Schema({vol.Required("session"): str}, extra=vol.ALLOW_EXTRA)
+NOTIFY_SCHEMA = vol.Schema({vol.Required("mode"): vol.In(NOTIFY_MODES)})
 
 
 async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -43,6 +55,15 @@ async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             call.data["question"], call.data.get("rev"), call.data["answers"], call.data.get("display", "")
         )
 
+    async def background(call: ServiceCall) -> ServiceResponse:
+        return {"tasks": background_rows(registry)}
+
+    async def set_notify(call: ServiceCall) -> ServiceResponse:
+        # The options are the one place the mode lives; the update listener reloads the announcer and the sensor.
+        mode = call.data["mode"]
+        hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_NOTIFY: mode})
+        return {"notify": mode}
+
     hass.services.async_register(DOMAIN, SERVICE_OVERVIEW, overview, supports_response=SupportsResponse.ONLY)
     hass.services.async_register(
         DOMAIN, SERVICE_QUESTION, question, schema=QUESTION_SCHEMA, supports_response=SupportsResponse.ONLY
@@ -51,8 +72,19 @@ async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_ANSWER, answer, schema=ANSWER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
     )
+    hass.services.async_register(DOMAIN, SERVICE_BACKGROUND, background, supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(
+        DOMAIN, SERVICE_NOTIFY, set_notify, schema=NOTIFY_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+    )
 
 
 def async_unload_services(hass: HomeAssistant) -> None:
-    for service in (SERVICE_OVERVIEW, SERVICE_QUESTION, SERVICE_HINT, SERVICE_ANSWER):
+    for service in (
+        SERVICE_OVERVIEW,
+        SERVICE_QUESTION,
+        SERVICE_HINT,
+        SERVICE_ANSWER,
+        SERVICE_BACKGROUND,
+        SERVICE_NOTIFY,
+    ):
         hass.services.async_remove(DOMAIN, service)

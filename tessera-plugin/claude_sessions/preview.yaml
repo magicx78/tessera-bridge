@@ -67,6 +67,16 @@ tiles:
   - tile: limits
     name: No sensor
     sizes: [1x1]
+  - tile: limits
+    name: Claude 5h
+    entity: sensor.claude_sessions
+    options: { window: five }
+    sizes: [1x1, 2x1, 2x2]
+  - tile: limits
+    name: Claude week
+    entity: sensor.claude_sessions_work
+    options: { window: week }
+    sizes: [1x1]
   - tile: background
     entity: sensor.claude_background
     sizes: [1x1, 2x1, 2x2, 3x3]
@@ -82,8 +92,11 @@ states:
       bg_titles: ["Build the P4 firmware", "Review the registry change", "Watch the HA log", "Release checks"]
       bg_kinds: [shell, agent, monitor, workflow]
       bg_sess: [tessera-bridge, tessera-bridge, homelab-docs, garden-irrigation]
-      bg_at: ["{epoch-3m}", "{epoch-12m}", "{epoch-47m}", "{epoch-2h}"]
-      bg_hm: ["14:57", "14:48", "14:13", "13:00"]
+      bg_at: ["{epoch-3m}", "{epoch-12m}", "{epoch-47m}", "{epoch-5h}"]
+      bg_hm: ["14:57", "14:48", "14:13", "10:00"]
+      # Steps only where the task reports them (the mod 0.2.4): -1 and 0 while unknown.
+      bg_done: [-1, 2, -1, 3]
+      bg_total: [0, 5, 0, 4]
   sensor.claude_background_empty:
     state: "0"
     attributes:
@@ -92,6 +105,8 @@ states:
       bg_sess: []
       bg_at: []
       bg_hm: []
+      bg_done: []
+      bg_total: []
   sensor.claude_sessions:
     state: "3"
     attributes:
@@ -99,6 +114,7 @@ states:
       # No event here: a new question would open its popup over every picture of the tiles (the popup itself is
       # checked on the glass).
       event: ""
+      event_rev: 3
       open: 2
       h: [sab3, sab5, sab1]
       names: [tessera-bridge, homelab-docs, garden-irrigation]
@@ -115,6 +131,7 @@ states:
       lwk_at: "{epoch+3d}"
       lx_names: [opus]
       lx: [8]
+      notify: speech
   sensor.claude_sessions_work:
     state: "2"
     attributes:
@@ -223,7 +240,16 @@ commands:
     detail: "Bash: rm -rf build"
   "call_service:tessera_claude.answer":
     accepted: true
+  "call_service:tessera_claude.get_background":
+    tasks:
+      - { title: "Build the P4 firmware", kind: shell, session: tessera-bridge, at: "{epoch-3m}", hm: "14:57", done: -1, total: 0, note: "" }
+      - { title: "Review the registry change", kind: agent, session: tessera-bridge, at: "{epoch-12m}", hm: "14:48", done: 2, total: 5, note: "Writing the tests" }
+      - { title: "Watch the HA log", kind: monitor, session: homelab-docs, at: "{epoch-47m}", hm: "14:13", done: -1, total: 0, note: "" }
+      - { title: "Release checks", kind: workflow, session: garden-irrigation, at: "{epoch-5h}", hm: "10:00", done: 3, total: 4, note: "" }
+  "call_service:tessera_claude.set_notify":
+    notify: tone
 
 cards:
   - { card: sessions, entity: sensor.claude_sessions }
+  - { card: background, entity: sensor.claude_background }
   - { card: question }

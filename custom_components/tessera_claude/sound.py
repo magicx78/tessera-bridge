@@ -1,6 +1,7 @@
 """Sounds, optional: a chime and the spoken question or hint through Chime TTS, once per question or hint.
 
-Nothing plays without a player in the options. Every new question and hint also goes out as an event on the bus
+The `notify` option picks speech (chime and text), tone (the chime alone) or none. Nothing plays without a player in
+the options. Every new question and hint also goes out as an event on the bus
 (tessera_claude_question, tessera_claude_hint), for an automation of your own.
 """
 from __future__ import annotations
@@ -15,12 +16,15 @@ from .const import (
     CONF_HINTS,
     CONF_LANGUAGE,
     CONF_PLAYER,
-    CONF_SPEAK,
     CONF_TTS,
     DEFAULT_CHIME,
     DEFAULT_LANGUAGE,
     EVENT_HINT,
     EVENT_QUESTION,
+    NOTIFY_NONE,
+    NOTIFY_SPEECH,
+    NOTIFY_TONE,
+    notify_of,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,7 +42,8 @@ class Announcer:
         self.chime = options.get(CONF_CHIME, DEFAULT_CHIME) or ""
         self.tts = options.get(CONF_TTS) or ""
         self.language = options.get(CONF_LANGUAGE, DEFAULT_LANGUAGE) or ""
-        self.speak = options.get(CONF_SPEAK, True)
+        # `notify_of` falls back to the old `speak` yes/no for an entry that was not migrated yet.
+        self.notify = notify_of(options)
         self.hints = options.get(CONF_HINTS, True)
 
     async def handle(self, event: dict) -> None:
@@ -52,12 +57,13 @@ class Announcer:
                 await self.say(f"{event.get('session', '')} wartet auf eine Freigabe am PC.")
 
     async def say(self, text: str) -> None:
-        if not self.player:
+        if not self.player or self.notify == NOTIFY_NONE:
             return
         data: dict = {"entity_id": self.player, "announce": True}
-        if self.chime:
-            data["chime_path"] = self.chime
-        if self.speak and text:
+        chime = self.chime or (DEFAULT_CHIME if self.notify == NOTIFY_TONE else "")
+        if chime:
+            data["chime_path"] = chime
+        if self.notify == NOTIFY_SPEECH and text:
             data["message"] = text
             if self.language:
                 data["language"] = self.language

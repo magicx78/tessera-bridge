@@ -1,6 +1,6 @@
-import type { SessionRateLimit } from 'claude-code'
+import type { AgentInfo, SessionRateLimit } from 'claude-code'
 
-import { type BackgroundKind, type BackgroundStart, MAX_TASKS, TASK_MAX_AGE_MS } from './background'
+import { AGENT_OVER, type BackgroundKind, type BackgroundStart, MAX_TASKS, type Progress, TASK_MAX_AGE_MS } from './background'
 import { baseName, describeCall } from './describe'
 import { apiCall, quietly, type HaConfig, type Json } from './ha'
 import type { Host } from './host'
@@ -59,7 +59,14 @@ export function inputKey(input: unknown): string {
 }
 
 /** A background task of the session, and when it started, in the host clock's milliseconds. */
-type BackgroundTask = { kind: BackgroundKind; title: string; startedAt: number }
+type BackgroundTask = {
+  kind: BackgroundKind
+  title: string
+  startedAt: number
+  done?: number
+  total?: number
+  note?: string
+}
 
 type Waiter = (status: QuestionStatus) => void
 
@@ -86,6 +93,9 @@ export class SessionBridge {
   readonly pendingAsks = new Map<string, PendingAsk>()
   /** What runs in the background of this session, by task id, oldest first. */
   readonly tasks = new Map<string, BackgroundTask>()
+  /** The task ids each list of the engine's (`stop`, `agents`) has named as running, by list. */
+  private readonly listed = new Map<string, Set<string>>()
+  private agentsFailed = false
   private readonly waiters = new Map<string, Waiter[]>()
   private lastReportAt = 0
   private dirty = true
@@ -139,7 +149,14 @@ export class SessionBridge {
       // Each background task's age in seconds, not its start: the clocks of this PC and Home Assistant differ.
       tasks: Array.from(this.tasks.entries())
         .filter(([, t]) => now - t.startedAt < TASK_MAX_AGE_MS)
-        .map(([id, t]) => ({ id, kind: t.kind, title: t.title, age: Math.max(0, Math.round((now - t.startedAt) / 1000)) })),
+        .map(([id, t]) => ({
+          id,
+          kind: t.kind,
+          title: t.title,
+          age: Math.max(0, Math.round((now - t.startedAt) / 1000)),
+          // Only what the task itself reported: without a total there is no bar to draw.
+          ...(t.total === undefined ? {} : { done: t.done ?? 0, total: t.total, note: t.note ?? '' }),
+        })),
     }
   }
 
@@ -149,14 +166,66 @@ export class SessionBridge {
     this.tasks.set(task.id, { kind: task.kind, title: task.title, startedAt: now })
     for (const id of this.tasks.keys()) {
       if (this.tasks.size <= MAX_TASKS) break
-      this.tasks.delete(id)
+      this.endTask(id)
     }
     this.touch()
   }
 
+  /**
+   * A background agent reported a step; a task this session does not know (another loop's, an ended one) is left be.
+   * True only when a task matched and the report changed it.
+   */
+  progressTask(id: string, p: Progress): boolean {
+    const task = this.tasks.get(id)
+    if (!task || (task.done === p.done && task.total === p.total && task.note === p.note)) return false
+    this.tasks.set(id, { ...task, done: p.done, total: p.total, note: p.note })
+    this.touch()
+    return true
+  }
+
   /** A background task ended, was stopped or failed. */
   endTask(id: string) {
+    for (const ids of this.listed.values()) ids.delete(id)
     if (this.tasks.delete(id)) this.touch()
+  }
+
+  /**
+   * Ends every task (of `kind`, or any) that the engine's list `source` named as running before and does no more. One
+   * it never named stays: the list may not have caught up with the start yet, or spell the id otherwise.
+   */
+  sweepTasks(source: string, running: ReadonlySet<string>, kind?: BackgroundKind) {
+    const listed = this.listed.get(source) ?? new Set<string>()
+    this.listed.set(source, listed)
+    for (const [id, task] of Array.from(this.tasks)) {
+      if (kind !== undefined && task.kind !== kind) continue
+      if (running.has(id)) listed.add(id)
+      else if (listed.has(id)) this.endTask(id)
+    }
+  }
+
+  /**
+   * The net under an agent's turn.complete: the engine's agent list says which agents are over. With `only`, just that
+   * agent is looked at, and one the list no longer names is over too (its turn is done, so it had been listed).
+   */
+  async sweepAgents(host: Host, only?: string) {
+    if (this.ended || !Array.from(this.tasks.values()).some(t => t.kind === 'agent')) return
+    let agents: AgentInfo[]
+    try {
+      agents = await host.agents()
+    } catch (err) {
+      // An engine without the list: the other ends still count. Said once, not every tick.
+      if (!this.agentsFailed) host.log(`tessera-bridge: agent list: ${err instanceof Error ? err.message : String(err)}`)
+      this.agentsFailed = true
+      return
+    }
+    if (only !== undefined) {
+      const agent = agents.find(a => a.id === only)
+      if (!agent || AGENT_OVER.has(agent.status)) this.endTask(only)
+      return
+    }
+    const over = agents.filter(a => AGENT_OVER.has(a.status) && this.tasks.get(a.id)?.kind === 'agent')
+    for (const agent of over) this.endTask(agent.id)
+    this.sweepTasks('agents', new Set(agents.filter(a => !AGENT_OVER.has(a.status)).map(a => a.id)), 'agent')
   }
 
   /** Sends the report; hands every open question's status to whoever waits for it. Undefined when HA is down. */
@@ -179,6 +248,7 @@ export class SessionBridge {
 
   /** The timer's tick: a report when something changed, a question is open, or the heartbeat is due. */
   async tick(host: Host) {
+    await this.sweepAgents(host)
     const now = await host.now()
     const due = now - this.lastReportAt >= HEARTBEAT_MS
     if (this.dirty || this.questions.size > 0 || due) await this.report(host)

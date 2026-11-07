@@ -5,14 +5,18 @@ export type BackgroundStart = { id: string; kind: BackgroundKind; title: string 
 
 /** At most this many tasks per session are reported; the oldest give way. */
 export const MAX_TASKS = 8
-/** A task not heard of for this long is taken as gone (its end was missed, say by a reload of the mod). */
+/**
+ * A task not heard of for this long is taken as gone (its end was missed, say by a reload of the mod). The last net:
+ * an agent's turn, the engine's agent list and a Stop's list of work in flight end most tasks long before.
+ */
 export const TASK_MAX_AGE_MS = 24 * 3600_000
 
 const TITLE_MAX = 80
+const NOTE_MAX = 80
 
-function oneLine(text: string): string {
+function oneLine(text: string, limit = TITLE_MAX): string {
   const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > TITLE_MAX ? `${line.slice(0, TITLE_MAX - 1)}…` : line
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
 }
 
 /**
@@ -70,4 +74,34 @@ export function endedTasks(text: string): string[] {
     if (id && status && FINAL.has(status.toLowerCase())) ended.push(id)
   }
   return ended
+}
+
+/**
+ * The ids a classic Stop names as still in flight (`background_tasks`), or null when it names no list: an engine that
+ * sends none says nothing about what ended.
+ */
+export function runningTasks(backgroundTasks: unknown): Set<string> | null {
+  if (!Array.isArray(backgroundTasks)) return null
+  const ids = backgroundTasks.map(t => (t as { id?: unknown } | null)?.id)
+  return new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0))
+}
+
+/** The `$.agent.list()` statuses of an agent whose loop is over. */
+export const AGENT_OVER = new Set(['completed', 'failed', 'killed'])
+
+/** How far a background agent is, as its own step reports say. */
+export type Progress = { done: number; total: number; note?: string }
+
+/** The tools an agent reports its steps with; both take `{ done, total, note? }`. */
+export const PROGRESS_TOOLS = new Set(['mcp__clawd-hq__step', 'mcp__savvy-progress__step'])
+
+/** The progress a step call reports, or null for another tool or a report that makes no sense (it would draw a wrong bar). */
+export function progressReport(tool: string, input: unknown): Progress | null {
+  if (!PROGRESS_TOOLS.has(tool)) return null
+  const i = (input ?? {}) as Record<string, unknown>
+  const { done, total } = i
+  if (typeof done !== 'number' || typeof total !== 'number') return null
+  if (!Number.isInteger(done) || !Number.isInteger(total) || total < 1 || done < 0 || done > total) return null
+  const note = typeof i.note === 'string' ? oneLine(i.note, NOTE_MAX) : ''
+  return note ? { done, total, note } : { done, total }
 }

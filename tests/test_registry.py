@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components"
 
 import pytest  # noqa: E402
 
-from registry import FORGET_AFTER, LIST_LIMIT, LOST_AFTER, Registry  # noqa: E402
+from registry import FORGET_AFTER, LIST_LIMIT, LOST_AFTER, NOTE_LIMIT, Registry  # noqa: E402
 
 
 def question(tool_use_id: str, nonce: str = "n1", multi: bool = False, parts: int = 1, labels=("Ja", "Nein")):
@@ -336,6 +336,67 @@ def test_background_tasks_keep_their_start_and_go_with_their_session():
     r.report(report("pc1", "b", 2, "B", "idle", tasks=[{"id": "a1", "kind": "agent", "title": "t", "age": 0}]), now=200)
     r.end({"instance": "pc1", "session": "b"}, now=201)
     assert r.background(202) == []
+
+
+def test_background_progress_lands_in_the_rows_and_follows_every_report():
+    r = Registry()
+    task = {"id": "a1", "kind": "agent", "title": "Write the tests", "age": 30, "done": 1, "total": 5, "note": "Reading the plan"}
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[task]), now=100)
+    row = r.background(100)[0]
+    assert (row["done"], row["total"], row["note"], row["started"]) == (1, 5, "Reading the plan", 70)
+    # A later report moves the progress and the note, never the start (the age it carries is rounded).
+    r.report(report("pc1", "a", 2, "A", "working", tasks=[{**task, "age": 41, "done": 3, "note": "Writing"}]), now=111)
+    row = r.background(111)[0]
+    assert (row["done"], row["total"], row["note"], row["started"]) == (3, 5, "Writing", 70)
+    # A report without progress takes it back: the task is no longer known to be at a step.
+    r.report(report("pc1", "a", 3, "A", "working", tasks=[{"id": "a1", "kind": "agent", "title": "Write the tests"}]), now=112)
+    row = r.background(112)[0]
+    assert (row["done"], row["total"], row["note"], row["started"]) == (None, None, "", 70)
+
+
+@pytest.mark.parametrize(
+    "done, total",
+    [
+        (6, 5),  # more done than the total
+        (-1, 5),
+        (2, 0),  # a total below 1
+        (True, 5),  # a bool is not a count
+        (2, True),
+        (2.0, 5),  # nor is a float
+        (2, 5.0),
+        ("2", 5),
+        (None, 5),
+        (2, None),
+    ],
+)
+def test_background_progress_that_is_not_sound_is_unknown(done, total):
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "a1", "kind": "agent", "title": "t", "done": done, "total": total}]), now=100)
+    row = r.background(100)[0]
+    assert row["done"] is None and row["total"] is None
+
+
+def test_background_progress_edges_and_missing_fields_are_known_or_unknown():
+    r = Registry()
+    tasks = [
+        {"id": "start", "title": "t", "done": 0, "total": 1},
+        {"id": "end", "title": "t", "done": 4, "total": 4},
+        {"id": "plain", "title": "t"},
+    ]
+    r.report(report("pc1", "a", 1, "A", "working", tasks=tasks), now=100)
+    by_id = {t["id"]: t for t in r.background(100)}
+    assert (by_id["start"]["done"], by_id["start"]["total"]) == (0, 1)
+    assert (by_id["end"]["done"], by_id["end"]["total"]) == (4, 4)
+    assert (by_id["plain"]["done"], by_id["plain"]["total"], by_id["plain"]["note"]) == (None, None, "")
+
+
+def test_background_note_is_cut_and_only_text():
+    r = Registry()
+    tasks = [{"id": "long", "title": "t", "note": "n" * 200}, {"id": "odd", "title": "t", "note": 7}]
+    r.report(report("pc1", "a", 1, "A", "working", tasks=tasks), now=100)
+    by_id = {t["id"]: t for t in r.background(100)}
+    assert NOTE_LIMIT == 40 and len(by_id["long"]["note"]) == NOTE_LIMIT and by_id["long"]["note"].endswith("…")
+    assert by_id["odd"]["note"] == ""
 
 
 if __name__ == "__main__":

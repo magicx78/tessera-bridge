@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.9
+version: 0.1.10
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
@@ -18,15 +18,18 @@ boards: any
 flash_kb: 24
 
 permissions:
-  # The screen itself follows three attributes of the sessions sensor (a new question, the count, a change), so a
-  # popup can show while no tile of the plugin is on the glass.
+  # The screen itself follows five attributes of the sessions sensor (a new question and its counter, the count, a
+  # change, the announcement), so a popup can show while no tile of the plugin is on the glass.
   read_entities: ["{sessions}"]
-  # What the cards and the popup ask the integration through the app, and how the screen answers a question.
+  # What the cards and the popup ask the integration through the app, how the screen answers a question, how the
+  # settings row "Announce" sets speech, tone or nothing, and what the background card asks for its notes.
   ha_commands:
     - "call_service:tessera_claude.get_overview"
     - "call_service:tessera_claude.get_question"
     - "call_service:tessera_claude.get_hint"
     - "call_service:tessera_claude.answer"
+    - "call_service:tessera_claude.set_notify"
+    - "call_service:tessera_claude.get_background"
 
 inputs:
   - { id: sessions, kind: entity, domains: [sensor], scope: screen, label: input_sessions, hint: input_sessions_hint }
@@ -66,32 +69,41 @@ tiles:
                     { value: spark, label: motion_spark }, { value: none, label: motion_none }] }
   # The account's limits: five hours and the week as bars, each with a mark where an even pace would stand and when
   # it starts anew; any window of one model the sessions report (lx_names, lx) comes as a further bar. Same sensor.
+  # With the option "window" one window alone, drawn as Tessera's meter tile: the percent large, the reset in the
+  # top right corner.
   - id: limits
     name: tile_limits_name
     icon: gauge
     sizes: { min: 1x1, max: 3x2 }
-    memory: 2600
+    memory: 2700
     domains: [sensor]
     has_attributes: [l5h, lwk]
     attributes: [l5h, l5h_at, lwk, lwk_at, lx_names, lx]
     example: tile_limits_example
     preview: { title: "{name}", value: "{state}" }
+    options:
+      - { id: window, kind: choice, label: opt_window, hint: opt_window_hint, default: both,
+          choices: [{ value: both, label: window_both }, { value: five, label: window_five },
+                    { value: week, label: window_week }] }
   # What runs in the background of the sessions (shells, agents, monitors, workflows) and since when: the integration's
-  # background sensor (sensor.claude_background), newest first.
+  # background sensor (sensor.claude_background), newest first. A bar under each task: what is left of it (by the
+  # steps it reported, else by its age), coloured by its age. A tap opens the background card.
   - id: background
     name: tile_background_name
     icon: progress-clock
     sizes: { min: 1x1, max: 3x3 }
-    memory: 1400
+    # The words of ten rows and a bar of two blocks for each.
+    memory: 3000
     domains: [sensor]
     has_attributes: [bg_titles]
-    attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm]
+    attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm, bg_done, bg_total]
     example: tile_background_example
     preview: { title: "{name}", value: "{state}" }
 
 cards:
   - { id: sessions, name: card_sessions }
   - { id: question, name: card_question }
+  - { id: background, name: card_background }
 
 bar_items:
   - { id: asks, label: bar_asks, icon: robot, example: bar_example }

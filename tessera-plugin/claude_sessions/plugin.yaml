@@ -3,10 +3,11 @@
 defaults:
   SESSIONS: sensor.claude_sessions
 
-# Four attributes of the sessions sensor, straight from Home Assistant: the newest event (a new question, a new
+# Five attributes of the sessions sensor, straight from Home Assistant: the newest event (a new question, a new
 # permission hint), its counter (a second hint of the same session repeats the event's text, not the counter), how
-# many questions are open, and a counter that moves with every change. The plugin's cards and its popup follow them
-# while no tile is on the glass.
+# many questions are open, a counter that moves with every change, and how a question or hint is announced (speech,
+# tone, none; the settings row "Announce" shows it). The plugin's cards and its popup follow them while no tile is on
+# the glass.
 text_sensor:
   - platform: homeassistant
     id: claude_sessions_event
@@ -27,6 +28,11 @@ text_sensor:
     id: claude_sessions_rev
     entity_id: ${SESSIONS}
     attribute: rev
+    internal: true
+  - platform: homeassistant
+    id: claude_sessions_notify
+    entity_id: ${SESSIONS}
+    attribute: notify
     internal: true
 
 # Two settings, kept on the screen and shown in Home Assistant and on the screen's settings page: whether a new
@@ -52,5 +58,6 @@ claude_sessions:
   event_rev: claude_sessions_event_rev
   open: claude_sessions_open
   rev: claude_sessions_rev
+  notify: claude_sessions_notify
   question_popup: claude_question_popup
   hint_popup: claude_hint_popup

@@ -36,3 +36,16 @@ answer:
       example: kitchen
       selector:
         text:
+get_background:
+set_notify:
+  fields:
+    mode:
+      required: true
+      example: tone
+      selector:
+        select:
+          options:
+            - speech
+            - tone
+            - none
+          translation_key: notify

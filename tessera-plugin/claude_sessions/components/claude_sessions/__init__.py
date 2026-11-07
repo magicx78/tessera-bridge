@@ -1,4 +1,4 @@
-"""Claude sessions: the ESPHome side. The four homeassistant text sensors and the two switches of plugin.yaml are
+"""Claude sessions: the ESPHome side. The five homeassistant text sensors and the two switches of plugin.yaml are
 handed to the component; smart_display.register_plugin() reads the id, version, tile memory and the screen's texts
 from the manifest and translations/ beside this folder (docs/FIRMWARE_API.md of the plugins repository)."""
 import esphome.codegen as cg
@@ -12,6 +12,7 @@ CONF_EVENT = "event"
 CONF_EVENT_REV = "event_rev"
 CONF_OPEN = "open"
 CONF_REV = "rev"
+CONF_NOTIFY = "notify"
 CONF_QUESTION_POPUP = "question_popup"
 CONF_HINT_POPUP = "hint_popup"
 
@@ -25,6 +26,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_EVENT_REV): cv.use_id(text_sensor.TextSensor),
         cv.Required(CONF_OPEN): cv.use_id(text_sensor.TextSensor),
         cv.Required(CONF_REV): cv.use_id(text_sensor.TextSensor),
+        cv.Required(CONF_NOTIFY): cv.use_id(text_sensor.TextSensor),
         cv.Required(CONF_QUESTION_POPUP): cv.use_id(switch.Switch),
         cv.Required(CONF_HINT_POPUP): cv.use_id(switch.Switch),
     }
@@ -39,5 +41,6 @@ async def to_code(config):
     cg.add(var.set_event_rev(await cg.get_variable(config[CONF_EVENT_REV])))
     cg.add(var.set_open(await cg.get_variable(config[CONF_OPEN])))
     cg.add(var.set_rev(await cg.get_variable(config[CONF_REV])))
+    cg.add(var.set_notify(await cg.get_variable(config[CONF_NOTIFY])))
     cg.add(var.set_question_popup(await cg.get_variable(config[CONF_QUESTION_POPUP])))
     cg.add(var.set_hint_popup(await cg.get_variable(config[CONF_HINT_POPUP])))

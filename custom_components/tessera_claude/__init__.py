@@ -17,7 +17,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
 from .api import TesseraClaudeView
-from .const import DOMAIN, PRUNE_SECONDS, SIGNAL_UPDATE
+from .const import CONF_NOTIFY, CONF_SPEAK, DOMAIN, PRUNE_SECONDS, SIGNAL_UPDATE, notify_of
 from .registry import Registry
 from .services import async_setup_services, async_unload_services
 from .sound import Announcer
@@ -75,6 +75,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: TesseraClaudeConfigEntry
 
 async def _options_changed(hass: HomeAssistant, entry: TesseraClaudeConfigEntry) -> None:
     entry.runtime_data.announcer.reload()
+    # The sessions sensor shows the announce mode (`notify`): it follows the change without waiting for a report.
+    async_dispatcher_send(hass, SIGNAL_UPDATE)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Version 1 kept a yes/no `speak`; version 2 keeps the three-way `notify` (speech, tone, none)."""
+    if entry.version < 2:
+        options = dict(entry.options)
+        options[CONF_NOTIFY] = notify_of({**entry.data, **options})
+        options.pop(CONF_SPEAK, None)
+        hass.config_entries.async_update_entry(entry, options=options, version=2)
+    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TesseraClaudeConfigEntry) -> bool:

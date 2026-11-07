@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10
+- The two popup switches ("Popup on a question", "Popup on a permission hint") take effect at once, whether switched on the glass or in Home Assistant: off closes a popup of that kind that is open and drops a request still on its way, so no popup opens a moment later; on shows what waits right now (a question only while one is open, even after a later hint). Nothing to do.
+- A new settings row "Announce" ("Ansage"): Speech, Tone or Nothing, for a new question or permission hint. The choice is kept by the integration and shows at once on every screen. Needs the integration 0.2.5 (service `set_notify`, the sensor's `notify` attribute); with an older integration the row shows "Speech" and a choice does nothing.
+- The limits tile has an option "Window" in the editor: "Both" (default, as before), "5 hours" or "Week". With one window the tile looks like a meter tile: the percent big, the window's name under it, the bar along the bottom and "reset in ..." in the top corner where there is room (else under the bar). Pick it per tile, e.g. two 1x1 tiles side by side.
+- The background tile draws a bar under each task, coloured by how long it runs (the accent in the first hour, amber from one hour, red from four). The bar shows what is left: by the task's steps when it reports them ("2/5" at the right), else it shrinks over eight hours. A tap opens a new card "Claude in the background": every task with its session, since when, its bar, "Step 2 of 5" and the note it gave last ("no progress reported" where it gives none). Real steps need the integration 0.2.5 (`bg_done`/`bg_total`, service `get_background`) and the tessera-bridge mod 0.2.4; with older ones the bars go by age and the card shows the sensor's rows without notes.
+- The activity tile's animation takes the whole right half of a wide tile, down to the bottom; the number, the words and (on 2x2) the session names keep the left half.
+- Re-add nothing: the tiles keep their places. Update the integration to 0.2.5 and the mod to 0.2.4 for the Announce row and real progress.
+
 ## 0.1.9
 - A second permission hint of the same session opens its popup again: the sensor's `event` keeps its text for the same session (`hint:<handle>`), so the screen now follows the event counter (`event_rev`) too, and a counter that moves without a new text is a new event. The two values of one event arriving a moment apart are still one event.
 

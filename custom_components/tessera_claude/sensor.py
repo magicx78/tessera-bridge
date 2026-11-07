@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SIGNAL_UPDATE
 from .registry import BACKGROUND_LIMIT, NAME_LIMIT, Registry
+from .sound import Announcer
 
 # The names give the entity ids the old mod wrote: sensor.claude_limit_5h, sensor.claude_limit_week, sensor.claude_5h_reset.
 KNOWN_LIMITS = {"five_hour": ("claude_limit_5h", "Claude Limit 5h"), "seven_day": ("claude_limit_week", "Claude Limit Week")}
@@ -54,10 +55,35 @@ def format_remaining(resets_at: str | None, now: datetime) -> str:
     return f"{mins}m"
 
 
+def background_rows(registry: Registry) -> list[dict[str, Any]]:
+    """The background tasks the sensor and the get_background service show: the newest BACKGROUND_LIMIT, each with its
+    start as epoch seconds (`at`) and as the clock in the house reads it (`hm`), and its progress (`done` of `total`,
+    -1 and 0 while unknown; `note`, empty for none)."""
+    now = time.monotonic()
+    # The registry runs on the monotonic clock; the screen counts in epoch seconds.
+    wall = time.time()
+    rows = []
+    for row in registry.background(now)[:BACKGROUND_LIMIT]:
+        at = int(wall - (now - row["started"]))
+        rows.append(
+            {
+                "title": row["title"],
+                "kind": row["kind"],
+                "session": row["session"][:NAME_LIMIT],
+                "at": at,
+                "hm": dt_util.as_local(datetime.fromtimestamp(at, timezone.utc)).strftime("%H:%M"),
+                "done": row["done"] if row.get("done") is not None else -1,
+                "total": row["total"] if row.get("total") is not None else 0,
+                "note": row.get("note") or "",
+            }
+        )
+    return rows
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
     registry: Registry = entry.runtime_data.registry
     sensors = [
-        SessionsSensor(registry),
+        SessionsSensor(registry, entry.runtime_data.announcer),
         QuestionsSensor(registry),
         LimitSensor(registry, "five_hour"),
         LimitSensor(registry, "seven_day"),
@@ -113,8 +139,9 @@ class SessionsSensor(ClaudeSensor):
     _attr_icon = "mdi:robot"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, registry: Registry) -> None:
+    def __init__(self, registry: Registry, announcer: Announcer) -> None:
         super().__init__(registry, "claude_sessions", "Claude Sessions")
+        self.announcer = announcer
 
     @property
     def native_value(self) -> int:
@@ -141,6 +168,8 @@ class SessionsSensor(ClaudeSensor):
                 "lwk_at": _epoch(week.get("resets_at")) or 0,
                 "lx_names": [k.replace("seven_day_", "").replace("_", " ")[:16] for k in other],
                 "lx": [v.get("percent") if v.get("percent") is not None else -1 for v in other.values()],
+                # The announce mode (speech, tone, none), for the display's settings row.
+                "notify": self.announcer.notify,
             }
         )
         return snap
@@ -254,16 +283,13 @@ class BackgroundSensor(ClaudeSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        now = time.monotonic()
-        rows = self.registry.background(now)[:BACKGROUND_LIMIT]
-        # The registry runs on the monotonic clock; the screen counts in epoch seconds and shows the start as the
-        # clock in the house reads it.
-        wall = time.time()
-        starts = [int(wall - (now - row["started"])) for row in rows]
+        rows = background_rows(self.registry)
         return {
             "bg_titles": [row["title"] for row in rows],
             "bg_kinds": [row["kind"] for row in rows],
-            "bg_sess": [row["session"][:NAME_LIMIT] for row in rows],
-            "bg_at": starts,
-            "bg_hm": [dt_util.as_local(datetime.fromtimestamp(at, timezone.utc)).strftime("%H:%M") for at in starts],
+            "bg_sess": [row["session"] for row in rows],
+            "bg_at": [row["at"] for row in rows],
+            "bg_hm": [row["hm"] for row in rows],
+            "bg_done": [row["done"] for row in rows],
+            "bg_total": [row["total"] for row in rows],
         }

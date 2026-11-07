@@ -32,6 +32,8 @@ NAME_LIMIT = 24
 TASK_LIMIT = 8
 BACKGROUND_LIMIT = 10
 TITLE_LIMIT = 48
+# The longest progress note of a background task.
+NOTE_LIMIT = 40
 TASK_KINDS = ("shell", "agent", "monitor", "workflow")
 
 STATE_ORDER = {"asking": 0, "permission": 1, "working": 2, "idle": 3, "lost": 4, "ended": 5}
@@ -142,6 +144,19 @@ def _text(value: Any, limit: int | None = None) -> str:
     if limit is not None and len(text) > limit:
         text = text[: limit - 1] + "…"
     return text
+
+
+def _count(value: Any) -> int | None:
+    """A whole number as reported: a bool or a float is none."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _progress(raw: dict[str, Any]) -> tuple[int | None, int | None]:
+    """(done, total) of a task when both are sound (total >= 1, 0 <= done <= total), else (None, None)."""
+    done, total = _count(raw.get("done")), _count(raw.get("total"))
+    if done is None or total is None or total < 1 or not 0 <= done <= total:
+        return None, None
+    return done, total
 
 
 def _parts_of(raw: Any) -> list[dict[str, Any]]:
@@ -269,7 +284,8 @@ class Registry:
     @staticmethod
     def _take_tasks(session: Session, reported: Any, now: float) -> None:
         """The session's background tasks from its report. Each comes with its age in seconds (the PC's clock is not
-        this one); a task already known keeps its start, so the time does not wander with every report."""
+        this one); a task already known keeps its start, so the time does not wander with every report. Its progress
+        (`done` of `total`, and a short `note`) is taken from every report anew."""
         known = {t["id"]: t for t in session.tasks or []}
         tasks: list[dict[str, Any]] = []
         for raw in reported if isinstance(reported, list) else []:
@@ -282,12 +298,16 @@ class Registry:
             age = float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0 else 0.0
             kind = _text(raw.get("kind"))
             before = known.get(task_id)
+            done, total = _progress(raw)
             tasks.append(
                 {
                     "id": task_id,
                     "kind": kind if kind in TASK_KINDS else "shell",
                     "title": _text(raw.get("title"), TITLE_LIMIT) or task_id,
                     "started": before["started"] if before else now - age,
+                    "done": done,
+                    "total": total,
+                    "note": _text(raw.get("note"), NOTE_LIMIT),
                 }
             )
         session.tasks = tasks[-TASK_LIMIT:]

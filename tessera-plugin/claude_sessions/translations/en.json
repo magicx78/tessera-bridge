@@ -68,7 +68,14 @@
     "limits_title": "Claude limits",
     "limit_5h": "5 hours",
     "limit_week": "Week",
-    "limit_model": "Week {n}"
+    "limit_model": "Week {n}",
+    "setting_notify": "Announce",
+    "notify_speech": "Speech",
+    "notify_tone": "Tone",
+    "notify_none": "Nothing",
+    "background_step": "Step {a} of {b}",
+    "background_no_progress": "no progress reported",
+    "background_done": "{a}/{b}"
   },
   "app": {
     "name": "Claude sessions",
@@ -96,6 +103,12 @@
     "motion_spark": "Claude spark",
     "motion_none": "None",
     "tile_limits_name": "Claude limits",
-    "tile_limits_example": "5 hours 44% · week 12%"
+    "tile_limits_example": "5 hours 44% · week 12%",
+    "opt_window": "Window",
+    "opt_window_hint": "Both bars, or only the five-hour or the weekly window, large like a meter tile.",
+    "window_both": "Both",
+    "window_five": "5 hours",
+    "window_week": "Week",
+    "card_background": "Claude in the background"
   }
 }

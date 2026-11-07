@@ -1,4 +1,4 @@
-import type { HttpInit, HttpResponse, SessionUsage, TimerCall } from 'claude-code'
+import type { AgentInfo, HttpInit, HttpResponse, SessionUsage, TimerCall } from 'claude-code'
 
 /**
  * The engine as a hook bound it from its `$`, each member spelled `$.noun.event(...)` there (the engine refuses a
@@ -29,4 +29,6 @@ export type Host = {
   model: () => Promise<string>
   /** `$.session.usage`. */
   usage: () => Promise<SessionUsage>
+  /** `$.agent.list`. */
+  agents: () => Promise<AgentInfo[]>
 }

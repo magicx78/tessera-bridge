@@ -1,4 +1,4 @@
-"""The config flow: one entry, with the optional sound and hint settings, changeable later under Options."""
+"""The config flow: one entry, with the optional announce and hint settings, changeable later under Options."""
 from __future__ import annotations
 
 from typing import Any
@@ -12,12 +12,14 @@ from .const import (
     CONF_CHIME,
     CONF_HINTS,
     CONF_LANGUAGE,
+    CONF_NOTIFY,
     CONF_PLAYER,
-    CONF_SPEAK,
     CONF_TTS,
     DEFAULT_CHIME,
     DEFAULT_LANGUAGE,
     DOMAIN,
+    NOTIFY_MODES,
+    notify_of,
 )
 
 
@@ -32,14 +34,18 @@ def _schema(current: dict[str, Any]) -> vol.Schema:
                 selector.EntitySelectorConfig(domain="tts")
             ),
             vol.Optional(CONF_LANGUAGE, default=current.get(CONF_LANGUAGE, DEFAULT_LANGUAGE)): str,
-            vol.Optional(CONF_SPEAK, default=current.get(CONF_SPEAK, True)): bool,
+            vol.Optional(CONF_NOTIFY, default=notify_of(current)): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=NOTIFY_MODES, translation_key=CONF_NOTIFY, mode=selector.SelectSelectorMode.DROPDOWN
+                )
+            ),
             vol.Optional(CONF_HINTS, default=current.get(CONF_HINTS, True)): bool,
         }
     )
 
 
 class TesseraClaudeConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2  # 2: the yes/no `speak` became the three-way `notify` (see async_migrate_entry)
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:

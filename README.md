@@ -4,9 +4,9 @@
 
 **Alle laufenden Claude-Code-Sessions auf den Tessera-Touchscreens in Home Assistant – und Claudes Fragen direkt am Screen beantworten.**
 
-![Mod](https://img.shields.io/badge/Mod-0.2.2-7c3aed)
-![Integration](https://img.shields.io/badge/Integration-0.2.4-41bdf5)
-![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.8-f59e0b)
+![Mod](https://img.shields.io/badge/Mod-0.2.4-7c3aed)
+![Integration](https://img.shields.io/badge/Integration-0.2.5-41bdf5)
+![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.10-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
 ![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
 
@@ -22,10 +22,10 @@
 - 👆 **Fragen am Screen beantworten** – stellt Claude eine Auswahlfrage (AskUserQuestion), erscheint sie als Popup. Ein Tipp beantwortet sie in der richtigen Session. Das klappt mit mehreren Teilen, mit Mehrfachauswahl und mit **Am PC**, wenn der Rechner übernehmen soll.
 - 🏁 **Genau eine Antwort zählt** – PC und Screen, zwei Screens oder ein Doppeltipp: Home Assistant entscheidet, wer zuerst war. Die anderen Dialoge schließen sich von selbst.
 - 🔔 **Freigabe-Hinweise** – wartet eine Session am PC auf eine Freigabe, zeigt der Screen einen Hinweis. Antworten musst du am PC.
-- 📊 **Limits des Kontos** – 5-Stunden- und Wochen-Limit mit Reset-Zeit, als Sensoren und auf einer eigenen Kachel mit Balken und Tempo-Marke.
+- 📊 **Limits des Kontos** – 5-Stunden- und Wochen-Limit mit Reset-Zeit, als Sensoren und auf einer eigenen Kachel mit Balken und Tempo-Marke. Die Option „Fenster“ zeigt beide Fenster, nur 5 Stunden oder nur die Woche.
 - ⏱️ **Aktivität** – ob Claude gerade arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, wird die ganze Kachel rot. Dazu eine kleine Animation zur Wahl (Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine), die arbeitet, schläft und wartet.
-- 🧵 **Hintergrund-Aufgaben** – Shells, Agents, Monitore und Workflows, die im Hintergrund laufen, mit ihrer Startzeit.
-- 🔊 **Gong und Sprachausgabe** – auf Wunsch spielt Chime TTS einen Gong und liest die Frage vor.
+- 🧵 **Hintergrund-Aufgaben** – Shells, Agents, Monitore und Workflows, die im Hintergrund laufen, mit ihrer Startzeit. Unter jeder Aufgabe steht ein Balken, der kürzer wird, je mehr erledigt ist (die Schritte meldet der Agent selbst). Ein Tipp öffnet eine Karte mit Schritt und Notiz.
+- 🔊 **Ansage wählbar** – auf Wunsch spielt Chime TTS einen Gong und liest die Frage vor (Sprachausgabe), spielt nur den Gong (Signalton) oder schweigt (nichts). Am Screen und in Home Assistant einstellbar.
 
 ## Die drei Teile
 
@@ -60,15 +60,16 @@ Mehrere Sessions dürfen gleichzeitig fragen, auch von verschiedenen Rechnern. G
 | Kachel | Größen | Zeigt |
 |---|---|---|
 | **Claude-Sessions** | 1×1 bis 3×3 | Die Sessions mit ihrem Zustand und die offenen Fragen als Badge. Ab zwei Zeilen Höhe stehen die Limits in der letzten Zeile. Ein Tipp öffnet die Sessions-Karte. |
-| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. Option „Animation“: Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine. |
-| **Claude-Limits** | 1×1 bis 3×2 | 5-Stunden- und Wochenlimit als Balken, mit Tempo-Marke (wo ein gleichmäßiger Verbrauch stünde) und Reset. Meldet Claude Code ein Modellfenster (z. B. Fable), kommt es als eigener Balken dazu. |
-| **Claude im Hintergrund** | 1×1 bis 3×3 | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. |
+| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. Option „Animation“: Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine. Auf einer breiten Kachel nimmt die Animation die rechte Hälfte. |
+| **Claude-Limits** | 1×1 bis 3×2 | 5-Stunden- und Wochenlimit als Balken, mit Tempo-Marke (wo ein gleichmäßiger Verbrauch stünde) und Reset. Meldet Claude Code ein Modellfenster (z. B. Fable), kommt es als eigener Balken dazu. Option „Fenster“: beide, 5 Stunden oder Woche. Ein einzelnes Fenster sieht aus wie eine native Meter-Kachel, mit Reset-Countdown oben rechts. So ersetzen zwei 1×1-Kacheln die beiden nativen Kacheln samt „Reset in“. |
+| **Claude im Hintergrund** | 1×1 bis 3×3 | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Unter jeder Aufgabe ein Balken: kürzer, je mehr erledigt ist (Schritte aus dem Agent), sonst kürzer, je älter sie ist. Farbe nach Alter: Akzent, ab 1 Stunde gelb, ab 4 Stunden rot. Ein Tipp öffnet die Karte „Claude im Hintergrund“ mit „Schritt a von b · Notiz“ oder „kein Fortschritt gemeldet“. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. |
 
 Dazu kommen:
 
 - **Sessions-Karte** – jede Session mit Rechner, Kontext und dem, worauf sie wartet, seitenweise.
 - **Frage-Karte** – die Optionen als Tasten. Mehrere Teile kommen nacheinander, bei Mehrfachauswahl gibt es eine Senden-Taste, dazu **Am PC**.
-- **Popup** bei einer neuen Frage oder einer wartenden Freigabe. Beides lässt sich in den Plugin-Einstellungen abschalten.
+- **Popup** bei einer neuen Frage oder einer wartenden Freigabe. Beides lässt sich in den Plugin-Einstellungen abschalten, die Schalter „Frage als Popup“ und „Freigabe als Popup“ wirken sofort, auch wenn du sie in Home Assistant umlegst.
+- **Einstellungszeile „Ansage“** – Sprachausgabe, Signalton oder nichts. Es ist derselbe Wert wie die Option der Integration.
 - **Claude-Fragen** für die obere Leiste: die Zahl der offenen Fragen.
 
 ## Einrichten
@@ -85,7 +86,7 @@ Alle Felder im Formular sind optional:
 - der Gong
 - eine `tts`-Entität
 - die Sprache
-- ob die Frage vorgelesen wird
+- die Ansage: Sprachausgabe, Signalton oder nichts
 - ob eine Freigabe angesagt wird
 
 Später lässt sich das alles unter **Optionen** ändern.
@@ -112,7 +113,7 @@ Danach die Optionen setzen, unter `/plugin` → Installed → tessera-bridge:
 | `permissionHints` | `on`: wartende Freigaben werden am Screen als Hinweis gezeigt | `on` |
 | `hintDelay` | So viele Sekunden muss eine Freigabe-Anfrage am PC offen sein, bevor der Hinweis kommt. | `8` |
 
-In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden.
+In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden. Den Fortschritt eines Agents melden nur Sessions ab Mod 0.2.4; er kommt aus den Schritt-Werkzeugen `mcp__clawd-hq__step` und `mcp__savvy-progress__step`, die der Agent in seiner Schleife aufruft.
 
 Willst du nur für eine Session einen Checkout laden, geht das mit `claude --plugin-dir /pfad/zu/tessera-bridge`.
 
@@ -139,17 +140,17 @@ Mehr steht in [`tessera-plugin/claude_sessions/README.de.md`](tessera-plugin/cla
 
 | Entität | Inhalt |
 |---|---|
-| `sensor.claude_sessions` | Anzahl der Sessions, die gerade melden. Die Attribute enthalten die Listen für den Screen: Namen, Zustände, Kontext, Fragen, Aktivität und Limits. |
+| `sensor.claude_sessions` | Anzahl der Sessions, die gerade melden. Die Attribute enthalten die Listen für den Screen: Namen, Zustände, Kontext, Fragen, Aktivität und Limits. `notify` ist die gewählte Ansage (`speech`, `tone`, `none`). |
 | `sensor.claude_questions` | offene Fragen |
 | `sensor.claude_limit_5h` | 5-Stunden-Limit in % |
 | `sensor.claude_limit_week` | Wochen-Limit in % |
 | `sensor.claude_5h_reset` | Zeit bis zum Reset des 5-Stunden-Fensters, z. B. „1h 09m“ |
 | `sensor.claude_limits` | weitere Limit-Arten, falls das Konto welche meldet |
-| `sensor.claude_background` | Anzahl der Hintergrund-Aufgaben. Die Attribute `bg_titles`, `bg_kinds`, `bg_sess`, `bg_at` und `bg_hm` enthalten die Einzelheiten, das Neueste zuerst. |
+| `sensor.claude_background` | Anzahl der Hintergrund-Aufgaben. Die Attribute `bg_titles`, `bg_kinds`, `bg_sess`, `bg_at`, `bg_hm`, `bg_done` (-1: unbekannt) und `bg_total` (0: unbekannt) enthalten die Einzelheiten, das Neueste zuerst. |
 
 ### Dienste und Events
 
-- **Dienste** (mit Antwort): `tessera_claude.get_overview`, `tessera_claude.get_question`, `tessera_claude.get_hint` und `tessera_claude.answer`. Das Plugin ruft sie über die Tessera-App auf.
+- **Dienste** (mit Antwort): `tessera_claude.get_overview`, `tessera_claude.get_question`, `tessera_claude.get_hint`, `tessera_claude.get_background`, `tessera_claude.set_notify` (`mode`: `speech`, `tone` oder `none`) und `tessera_claude.answer`. Das Plugin ruft sie über die Tessera-App auf.
 - **Events** für eigene Automationen, etwa einen eigenen Gong oder eine Push-Nachricht: `tessera_claude_question` bei einer neuen Frage, `tessera_claude_hint` bei einer wartenden Freigabe.
 
 ## So reist eine Frage
@@ -182,6 +183,10 @@ War der PC schneller, meldet der Mod das bei der Integration an. Kam der Screen 
 - **„getrennt“** steht bei einer Session, deren Mod nicht mehr meldet, etwa weil der PC schläft oder das Netz weg ist. Nach zehn Minuten verschwindet sie.
 - **Limits** gehören dem Konto. Sie gelten für alle Sessions gleich und werden nie zusammengezählt. Es zählt der Wert der Session, die zuletzt gemessen hat.
 - **Textlängen** sind durch den Transport begrenzt: höchstens sechs Zeilen mit je 48 Bytes. Lange Optionsbeschreibungen werden gekürzt.
+
+## Umstieg auf 0.2.5
+
+Die Option „Frage vorlesen“ ist jetzt die Ansage (Sprachausgabe, Signalton oder nichts). Die Integration wandelt den Eintrag beim Start um. Danach kann eine ältere Integration den Eintrag nicht mehr lesen. Das Plugin 0.1.10 braucht Integration 0.2.5 für die Zeile „Ansage“ und die Karte, und Mod 0.2.4 für echten Fortschritt.
 
 ## Umstieg von Version 0.1
 

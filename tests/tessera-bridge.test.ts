@@ -1,7 +1,8 @@
+import type { AgentInfo, AgentStatus } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { backgroundStart, endedTasks, stoppedTask } from '../hooks/background'
+import { backgroundStart, endedTasks, progressReport, stoppedTask } from '../hooks/background'
 import { baseName, describeCall } from '../hooks/describe'
 import { toReported, toToolAnswers } from '../hooks/questions'
 
@@ -26,6 +27,8 @@ function mockHa(on: Parameters<TestBody>[1]) {
     questions: {} as Record<string, Status>,
     claim: { accepted: true } as Record<string, unknown>,
     down: false,
+    /** Every line the mod sent to ui.log. */
+    logs: [] as string[],
     cwd: '/home/me/projects/garden',
     reports: () => calls.filter(c => c.path === '/api/tessera_claude/v1/report').map(c => c.body),
     lastReport: () => {
@@ -52,7 +55,10 @@ function mockHa(on: Parameters<TestBody>[1]) {
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(reply) } }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', (_, e) => {
+    ha.logs.push(String((e as { text?: unknown }).text ?? ''))
+    return { value: undefined }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'session-aaaa' }))
   on('session.cwd', () => ({ value: ha.cwd }))
@@ -341,6 +347,245 @@ test('a background shell is reported with its age until TaskStop ends it', { opt
   await $.tool.call({ tool: 'TaskStop', task_id: 'bg1', tool_use_id: 't10' })
   await clock.advance(2_000)
   expect(ha.lastReport()?.tasks).toEqual([])
+})
+
+test('progress is read from the step tools and nowhere else', () => {
+  expect(progressReport('mcp__clawd-hq__step', { done: 2, total: 5, note: '  Writing' + String.fromCharCode(10) + '  tests ' })).toEqual({
+    done: 2,
+    total: 5,
+    note: 'Writing tests',
+  })
+  expect(progressReport('mcp__savvy-progress__step', { done: 0, total: 1 })).toEqual({ done: 0, total: 1 })
+  expect(progressReport('mcp__clawd-hq__step', { done: 3, total: 3, note: '   ' })).toEqual({ done: 3, total: 3 })
+  expect(progressReport('mcp__clawd-hq__step', { done: 6, total: 5 })).toBe(null)
+  expect(progressReport('mcp__clawd-hq__step', { done: 1.5, total: 5 })).toBe(null)
+  expect(progressReport('mcp__clawd-hq__step', { done: 1, total: 0 })).toBe(null)
+  expect(progressReport('mcp__clawd-hq__step', { done: -1, total: 5 })).toBe(null)
+  expect(progressReport('mcp__clawd-hq__step', { done: '2', total: 5 })).toBe(null)
+  expect(progressReport('mcp__other__step', { done: 1, total: 5 })).toBe(null)
+  const cut = progressReport('mcp__clawd-hq__step', { done: 1, total: 2, note: 'x'.repeat(200) })
+  expect(cut?.note?.length).toBe(80)
+})
+
+const agentInfo = (id: string, status: AgentStatus): AgentInfo => ({ id, status, description: '', type: 'general-purpose' })
+
+/** A session with one background agent `a1` running, and the step tool answered by a hook beneath ours. */
+async function withAgent($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]) {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: 'a1', description: 'Review' } }))
+  on('tool.call', { tool: 'mcp__clawd-hq__step' }, () => ({ result: {} }))
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+  // What the engine's agent list says; a test sets `agents.list`.
+  const agents = { list: [agentInfo('a1', 'running')] }
+  on('agent.list', () => ({ value: agents.list }))
+  await start($)
+  await $.tool.call({ tool: 'Agent', description: 'Review', run_in_background: true, tool_use_id: 't11' })
+  await clock.advance(2_000)
+  const task = () => (ha.lastReport()?.tasks as Array<Record<string, unknown>>)[0]!
+  return { clock, ha, task, agents }
+}
+
+test("a background agent's progress comes from the step tool of its loop", { options: OPTIONS }, async ($, on) => {
+  const { clock, ha, task } = await withAgent($, on)
+  expect(task().total).toBe(undefined)
+
+  await $.tool.call({ tool: 'mcp__clawd-hq__step', done: 2, total: 5, note: 'Writing tests', agentId: 'a1', tool_use_id: 't12' })
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
+
+  // Another loop's steps, or the main loop's, are not this task's.
+  await $.tool.call({ tool: 'mcp__clawd-hq__step', done: 4, total: 5, agentId: 'zz', tool_use_id: 't13' })
+  await $.tool.call({ tool: 'mcp__clawd-hq__step', done: 4, total: 5, tool_use_id: 't14' })
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
+
+  await $.prompt.submit({
+    text: '<task-notification><task-id>a1</task-id><status>completed</status></task-notification>',
+    origin: { kind: 'task-notification' },
+  })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.tasks).toEqual([])
+})
+
+test("a background agent's progress also comes from the classic hook of its loop", { options: OPTIONS }, async ($, on) => {
+  const { clock, task } = await withAgent($, on)
+  const step = { tool_name: 'mcp__savvy-progress__step', tool_input: { done: 1, total: 4 }, tool_response: {}, tool_use_id: 't15' }
+  await $.classic.PostToolUse({ ...step, agent_id: 'a1' })
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([1, 4, ''])
+
+  await $.classic.PostToolUse({ ...step, tool_input: { done: 3, total: 4 }, agent_id: 'zz' })
+  await $.classic.PostToolUse({ ...step, tool_input: { done: 3, total: 4 } })
+  await clock.advance(2_000)
+  expect(task().done).toBe(1)
+})
+
+test("a background agent's task ends with its loop's turn, and leaves the main loop's question be", { options: OPTIONS }, async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  let answer: ((value: unknown) => void) | null = null
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
+  const { clock, ha, agents } = await withAgent($, on)
+  const call = $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q10' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.state).toBe('asking')
+
+  // No notification comes: the end of the agent's run, with the list saying it is over, is the end of its task.
+  agents.list = [agentInfo('a1', 'completed')]
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-a1', reason: 'answer', agentId: 'a1' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.tasks).toEqual([])
+  expect(ha.lastReport()?.state).toBe('asking')
+  expect((ha.lastReport()?.questions as unknown[]).length).toBe(1)
+
+  answer!({ result: { questions: [], answers: {} } })
+  await call
+})
+
+const turnDone = (agentId?: string) => ({ answer: 'done', durationMs: 1, isAborted: false, turnId: 'turn-x', reason: 'answer' as const, agentId })
+
+test("a subagent's turn.start does not make the main session work", { options: OPTIONS }, async ($, on) => {
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  const { clock, ha } = await withAgent($, on)
+  await $.turn.start({ text: 'go', turnId: 'turn-a1', agentId: 'a1' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.state).toBe('idle')
+})
+
+test("a subagent's turn.complete leaves the working main session and its question be", { options: OPTIONS }, async ($, on) => {
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  let answer: ((value: unknown) => void) | null = null
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
+  const { clock, ha, agents } = await withAgent($, on)
+  await $.turn.start({ text: 'go', turnId: 'turn-main' })
+  const call = $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q11' })
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.state).toBe('asking')
+
+  agents.list = [agentInfo('a1', 'completed')]
+  await $.turn.complete(turnDone('a1'))
+  await clock.advance(2_000)
+  expect(ha.lastReport()?.tasks).toEqual([])
+  expect(ha.lastReport()?.state).toBe('asking')
+  expect((ha.lastReport()?.questions as unknown[]).length).toBe(1)
+
+  // The app answers in the end, so no call is left hanging.
+  answer!({ result: { questions: [], answers: {} } })
+  await call
+})
+
+test("an agent's turn.complete while the list shows it waiting or running keeps its task", { options: OPTIONS }, async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const { clock, ha, agents } = await withAgent($, on)
+  for (const status of ['waiting', 'running'] as const) {
+    agents.list = [agentInfo('a1', status)]
+    await $.turn.complete(turnDone('a1'))
+    await clock.advance(2_000)
+    expect(taskIds(ha)).toEqual(['a1'])
+  }
+
+  // Once the list shows it over, the next turn.complete ends it.
+  agents.list = [agentInfo('a1', 'completed')]
+  await $.turn.complete(turnDone('a1'))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
+})
+
+test("an agent the list no longer names ends at its turn.complete; a waiting one ends at the tick once over", { options: OPTIONS }, async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const { clock, ha, agents } = await withAgent($, on)
+  agents.list = [agentInfo('a1', 'waiting')]
+  await $.turn.complete(turnDone('a1'))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1'])
+
+  agents.list = [agentInfo('a1', 'failed')]
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
+})
+
+test("an agent the list has dropped ends at its turn.complete", { options: OPTIONS }, async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  const { clock, ha, agents } = await withAgent($, on)
+  agents.list = []
+  await $.turn.complete(turnDone('a1'))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
+})
+
+test('a progress report logs once, and only when it moves a known task', { options: OPTIONS }, async ($, on) => {
+  const { clock, ha } = await withAgent($, on)
+  const logged = () => ha.logs.filter(l => l.includes('progress of'))
+  const step = { tool: 'mcp__clawd-hq__step', done: 2, total: 5, note: 'Writing', tool_use_id: 't20' }
+
+  // An unknown agent id: nothing logged, nothing changed.
+  await $.tool.call({ ...step, agentId: 'zz' })
+  await $.classic.PostToolUse({ tool_name: step.tool, tool_input: step, tool_response: {}, tool_use_id: 't21', agent_id: 'zz' })
+  expect(logged()).toEqual([])
+
+  // Both hooks hear the same report: one line.
+  await $.tool.call({ ...step, agentId: 'a1' })
+  await $.classic.PostToolUse({ tool_name: step.tool, tool_input: step, tool_response: {}, tool_use_id: 't20', agent_id: 'a1' })
+  await clock.advance(2_000)
+  expect(logged()).toEqual(['tessera-bridge: progress of a1 2/5'])
+})
+
+/** The ids of the tasks the last report holds. */
+function taskIds(ha: ReturnType<typeof mockHa>) {
+  return (ha.lastReport()?.tasks as Array<{ id: string }>).map(t => t.id)
+}
+
+test('an agent the engine lists as over, or stops listing, leaves the report; one it never listed stays', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  let n = 0
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { status: 'async_launched', agentId: `a${++n}`, description: `Agent ${n}` } }))
+  const info = (id: string, status: AgentStatus): AgentInfo => ({ id, status, description: '', type: 'general-purpose' })
+  let listed: AgentInfo[] = []
+  on('agent.list', () => ({ value: listed }))
+
+  await start($)
+  for (const id of ['t30', 't31', 't32']) await $.tool.call({ tool: 'Agent', description: 'x', run_in_background: true, tool_use_id: id })
+  // Right after the launch the list may not name them yet: nothing goes.
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'a2', 'a3'])
+
+  listed = [info('a1', 'running'), info('a2', 'running')]
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'a2', 'a3'])
+
+  listed = [info('a1', 'completed')]
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a3'])
+})
+
+test("the main turn's Stop sweeps the background tasks it named before and names no more", { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  on('classic.Stop', () => ({}))
+  let n = 0
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg${++n}` } }))
+  const running = (id: string) => ({ id, type: 'shell', status: 'running', description: '' })
+
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true, tool_use_id: 't40' })
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [running('bg1')] })
+  await $.tool.call({ tool: 'Bash', command: 'npm run serve', run_in_background: true, tool_use_id: 't41' })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg1', 'bg2'])
+
+  // bg1 ended unheard; bg2 was never named (its id may be spelled otherwise there), so it stays.
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg2'])
+
+  // A Stop that names no list at all (an older engine) sweeps nothing.
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [running('bg2')] })
+  await $.classic.Stop({ stop_hook_active: false })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg2'])
 })
 
 /** The classic hooks' bottoms, and the session's permission mode as the next prompt names it. */
