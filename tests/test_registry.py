@@ -390,6 +390,16 @@ def test_background_progress_edges_and_missing_fields_are_known_or_unknown():
     assert (by_id["plain"]["done"], by_id["plain"]["total"], by_id["plain"]["note"]) == (None, None, "")
 
 
+@pytest.mark.parametrize("calls, kept", [(0, 0), (17, 17), (-1, None), (True, None), (3.0, None), ("3", None), (None, None)])
+def test_background_tool_calls_are_a_count_or_unknown(calls, kept):
+    """An agent that reports no step still shows that it works: the mod counts its tool calls."""
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "a1", "kind": "agent", "title": "t", "calls": calls}]), now=100)
+    assert r.background(100)[0]["calls"] == kept
+    r.report(report("pc1", "a", 2, "A", "working", tasks=[{"id": "a1", "kind": "agent", "title": "t"}]), now=101)
+    assert r.background(101)[0]["calls"] is None
+
+
 def test_background_note_is_cut_and_only_text():
     r = Registry()
     tasks = [{"id": "long", "title": "t", "note": "n" * 200}, {"id": "odd", "title": "t", "note": 7}]

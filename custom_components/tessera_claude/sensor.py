@@ -58,7 +58,8 @@ def format_remaining(resets_at: str | None, now: datetime) -> str:
 def background_rows(registry: Registry) -> list[dict[str, Any]]:
     """The background tasks the sensor and the get_background service show: the newest BACKGROUND_LIMIT, each with its
     start as epoch seconds (`at`) and as the clock in the house reads it (`hm`), and its progress (`done` of `total`,
-    -1 and 0 while unknown; `note`, empty for none)."""
+    -1 and 0 while unknown; `note`, empty for none) and an agent's tool calls so far (`calls`, -1 while unknown: what
+    the screen shows of an agent that reports no step)."""
     now = time.monotonic()
     # The registry runs on the monotonic clock; the screen counts in epoch seconds.
     wall = time.time()
@@ -75,6 +76,7 @@ def background_rows(registry: Registry) -> list[dict[str, Any]]:
                 "done": row["done"] if row.get("done") is not None else -1,
                 "total": row["total"] if row.get("total") is not None else 0,
                 "note": row.get("note") or "",
+                "calls": row["calls"] if row.get("calls") is not None else -1,
             }
         )
     return rows
@@ -292,4 +294,5 @@ class BackgroundSensor(ClaudeSensor):
             "bg_hm": [row["hm"] for row in rows],
             "bg_done": [row["done"] for row in rows],
             "bg_total": [row["total"] for row in rows],
+            "bg_calls": [row["calls"] for row in rows],
         }

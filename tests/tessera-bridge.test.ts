@@ -380,11 +380,23 @@ async function withAgent($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]
   // What the engine's agent list says; a test sets `agents.list`.
   const agents = { list: [agentInfo('a1', 'running')] }
   on('agent.list', () => ({ value: agents.list }))
+  // What the next model response asks for. A step tool's owner answers the call in its own `tool.call` hook, above
+  // ours, so no tool hook of ours and no PostToolUse hears it: the model's response is where every plugin reads it.
+  let toolUses: Array<{ name: string; input: unknown }> = []
+  on('turn.step', async function* () {
+    return { turnId: 'turn-x', index: 0, answer: '', toolUses, stopReason: 'tool_use', usage: null } as never
+  })
+  /** One model request of a loop (`agentId`; none for the main loop) whose response asks for `uses`. */
+  const modelStep = async (agentId: string | undefined, uses: typeof toolUses) => {
+    toolUses = uses
+    const stream = ($.turn.step as (e: unknown) => AsyncIterable<unknown>)({ turnId: 'turn-x', index: 0, model: 'claude', messageCount: 1, agentId })
+    for await (const _ of stream) void _
+  }
   await start($)
   await $.tool.call({ tool: 'Agent', description: 'Review', run_in_background: true, tool_use_id: 't11' })
   await clock.advance(2_000)
   const task = () => (ha.lastReport()?.tasks as Array<Record<string, unknown>>)[0]!
-  return { clock, ha, task, agents }
+  return { clock, ha, task, agents, modelStep }
 }
 
 test("a background agent's progress comes from the step tool of its loop", { options: OPTIONS }, async ($, on) => {
@@ -420,6 +432,43 @@ test("a background agent's progress also comes from the classic hook of its loop
   await $.classic.PostToolUse({ ...step, tool_input: { done: 3, total: 4 } })
   await clock.advance(2_000)
   expect(task().done).toBe(1)
+})
+
+test("a background agent's progress comes from its loop's model response, whoever answers the step tool", { options: OPTIONS }, async ($, on) => {
+  const { clock, task, modelStep } = await withAgent($, on)
+  expect(task().total).toBe(undefined)
+  expect(task().calls).toBe(0)
+
+  await modelStep('a1', [
+    { name: 'Read', input: { file_path: 'a.md' } },
+    { name: 'mcp__clawd-hq__step', input: { done: 2, total: 5, note: 'Writing tests' } },
+  ])
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
+  // Its other tool calls are counted, the step reports are not work: what shows when an agent reports no steps.
+  expect(task().calls).toBe(1)
+
+  await modelStep('a1', [{ name: 'Bash', input: { command: 'ls' } }, { name: 'mcp__savvy-progress__step', input: { done: 3, total: 5 } }])
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note, task().calls]).toEqual([3, 5, '', 2])
+
+  // Another loop's responses, or the main loop's, are not this task's.
+  await modelStep('zz', [{ name: 'Bash', input: {} }, { name: 'mcp__clawd-hq__step', input: { done: 4, total: 5 } }])
+  await modelStep(undefined, [{ name: 'Bash', input: {} }, { name: 'mcp__clawd-hq__step', input: { done: 4, total: 5 } }])
+  await clock.advance(2_000)
+  expect([task().done, task().calls]).toEqual([3, 2])
+})
+
+test('a shell has no tool calls to count', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' } }))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'sleep 99', description: 'Wait', run_in_background: true, tool_use_id: 't1' })
+  await clock.advance(2_000)
+  const task = (ha.lastReport()?.tasks as Array<Record<string, unknown>>)[0]!
+  expect([task.id, task.calls]).toEqual(['b1', undefined])
 })
 
 test("a background agent's task ends with its loop's turn, and leaves the main loop's question be", { options: OPTIONS }, async ($, on) => {

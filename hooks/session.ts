@@ -66,6 +66,11 @@ type BackgroundTask = {
   done?: number
   total?: number
   note?: string
+  /**
+   * An agent's tool calls so far, step reports left out; absent for a task that is no agent. What the screen can show
+   * of an agent that never reports a step: that it is busy, not how far along.
+   */
+  calls?: number
 }
 
 type Waiter = (status: QuestionStatus) => void
@@ -156,6 +161,7 @@ export class SessionBridge {
           age: Math.max(0, Math.round((now - t.startedAt) / 1000)),
           // Only what the task itself reported: without a total there is no bar to draw.
           ...(t.total === undefined ? {} : { done: t.done ?? 0, total: t.total, note: t.note ?? '' }),
+          ...(t.calls === undefined ? {} : { calls: t.calls }),
         })),
     }
   }
@@ -163,7 +169,7 @@ export class SessionBridge {
   /** A background task started; the oldest give way beyond MAX_TASKS. */
   startTask(task: BackgroundStart, now: number) {
     this.tasks.delete(task.id)
-    this.tasks.set(task.id, { kind: task.kind, title: task.title, startedAt: now })
+    this.tasks.set(task.id, { kind: task.kind, title: task.title, startedAt: now, ...(task.kind === 'agent' ? { calls: 0 } : {}) })
     for (const id of this.tasks.keys()) {
       if (this.tasks.size <= MAX_TASKS) break
       this.endTask(id)
@@ -179,6 +185,15 @@ export class SessionBridge {
     const task = this.tasks.get(id)
     if (!task || (task.done === p.done && task.total === p.total && task.note === p.note)) return false
     this.tasks.set(id, { ...task, done: p.done, total: p.total, note: p.note })
+    this.touch()
+    return true
+  }
+
+  /** A background agent asked for a tool other than a step report; a task this session does not know is left be. */
+  countCall(id: string): boolean {
+    const task = this.tasks.get(id)
+    if (!task || task.calls === undefined) return false
+    this.tasks.set(id, { ...task, calls: task.calls + 1 })
     this.touch()
     return true
   }

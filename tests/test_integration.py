@@ -266,6 +266,21 @@ async def test_background_progress_reaches_the_sensor_and_the_service(hass, hass
     assert [(t["title"], t["done"], t["total"], t["note"]) for t in reply["tasks"]] == [("Build", -1, 0, ""), ("Write the tests", 2, 5, "Writing test_x")]
 
 
+async def test_background_tool_calls_reach_the_sensor_and_the_service(hass, hass_client):
+    """An agent that never reports a step shows its tool calls; a shell (no count) shows -1."""
+    await setup_entry(hass)
+    client = await hass_client()
+    agent = {"id": "a1", "kind": "agent", "title": "Activity tile", "age": 60, "calls": 12}
+    shell = {"id": "b1", "kind": "shell", "title": "Build", "age": 0}
+    await post_report(client, tasks=[agent, shell])
+    await hass.async_block_till_done()
+    attributes = hass.states.get("sensor.claude_background").attributes
+    assert attributes["bg_titles"] == ["Build", "Activity tile"]
+    assert attributes["bg_calls"] == [-1, 12] and attributes["bg_done"] == [-1, -1] and attributes["bg_total"] == [0, 0]
+    reply = await hass.services.async_call(DOMAIN, "get_background", {}, blocking=True, return_response=True)
+    assert [(t["title"], t["calls"]) for t in reply["tasks"]] == [("Build", -1), ("Activity tile", 12)]
+
+
 async def test_get_background_is_empty_without_tasks(hass):
     await setup_entry(hass)
     reply = await hass.services.async_call(DOMAIN, "get_background", {}, blocking=True, return_response=True)

@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { backgroundStart, endedTasks, progressReport, runningTasks, stoppedTask } from './background'
+import { backgroundStart, endedTasks, PROGRESS_TOOLS, progressReport, runningTasks, stoppedTask } from './background'
 import { readConfig } from './ha'
 import type { Host } from './host'
 import { nonce, toToolAnswers, type ToolAnswers } from './questions'
@@ -110,6 +110,25 @@ export const register: Register = (on, options) => {
     takeProgress(e.tool_name, e.tool_input, e.agent_id)
     return next(e)
   }).catch(($, e, next) => next(e))
+  // The source that works in a real session: the model's response of a subagent's loop. A step tool is served inside
+  // its owner's own tool.call hook, which answers without next, so neither the tool.call hook below nor PostToolUse ever
+  // hears it; the response lists the call whoever answers it. Every other call the agent asks for counts as activity,
+  // the honest fallback for an agent that reports no step (its type may lack the tool).
+  on('turn.step', async function* ($, e, next) {
+    const step = yield* next(e)
+    try {
+      const session = host && e.agentId ? bridge.peek() : undefined
+      if (session && e.agentId) {
+        for (const use of step.toolUses) {
+          if (PROGRESS_TOOLS.has(use.name)) takeProgress(use.name, use.input, e.agentId)
+          else session.countCall(e.agentId)
+        }
+      }
+    } catch {
+      // The display is not worth a model response: whatever went wrong here, the step stands.
+    }
+    return step
+  })
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const h = host

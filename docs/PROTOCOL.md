@@ -58,14 +58,14 @@ the session is open (the reply doubles as the poll):
   "context": { "percent": 37, "tokens": 370000, "window": 1000000 },   // or null while unknown
   "limits": [ { "kind": "five_hour", "percent": 44, "resets_at": "2026-11-03T22:00:00Z" } ],
   "limits_age": 2,                        // seconds since this session measured its limits; null for never
-  "tasks": [ { "id": "a1b2…", "kind": "agent", "title": "Review", "age": 310, "done": 2, "total": 5, "note": "tests" } ],   // background tasks; done, total, note only once the task reported a step
+  "tasks": [ { "id": "a1b2…", "kind": "agent", "title": "Review", "age": 310, "done": 2, "total": 5, "note": "tests", "calls": 14 } ],   // background tasks; done, total, note only once the task reported a step; calls for agents only
   "questions": [ { "id": "toolu_01…", "nonce": "x8z1k0p3", "parts": [
       { "id": "p0", "header": "Approach", "text": "Which way?", "multi": false,
         "options": [ { "id": "o0", "label": "A", "description": "…" }, { "id": "o1", "label": "B", "description": "" } ] } ] } ]
 }
 ```
 
-`tasks` lists the session's background tasks (`kind`: shell, agent, monitor, workflow; `age` in seconds, as the clocks differ). `done`, `total` and `note` come from the step tools (`mcp__clawd-hq__step`, `mcp__savvy-progress__step`) a background agent calls in its loop, matched to the task by the Agent tool's `agentId`; a task without a report carries none of them. The integration cuts `note` to 40 chars and keeps at most 8 tasks per session.
+`tasks` lists the session's background tasks (`kind`: shell, agent, monitor, workflow; `age` in seconds, as the clocks differ). `done`, `total` and `note` come from the step tools (`mcp__clawd-hq__step`, `mcp__savvy-progress__step`) a background agent calls in its loop, matched to the task by the Agent tool's `agentId`; a task without a report carries none of them. The mod reads them from the model's response of the agent's loop (`turn.step`, its `toolUses`), not from the tool call: a step tool is answered inside its owner plugin's own `tool.call` hook, which no hook beneath it and no PostToolUse ever hears. `calls` counts the agent's other tool calls so far (agents only, from 0): what the screen can show of an agent that reports no step, for example because its type's tool list lacks the step tool. The integration cuts `note` to 40 chars and keeps at most 8 tasks per session.
 
 Reply: `{ "ok": true, "handle": "sab3", "questions": { "toolu_01…": { "status": "open|answered|cancelled|unknown",
 "by": "display|pc", "answer": { "p0": ["o1"] }, "nonce": "…", "handle": "qab7" } } }`. A report with a `seq` lower than
@@ -94,7 +94,7 @@ Services with a response; the plugin names them under `permissions.ha_commands`.
 | `tessera_claude.get_question` | `{ "question": "qab7" }` | `{ "h", "rev", "status", "session", "name", "parts": [ { "id", "header", "text", "lines": ["…≤46 bytes"], "multi", "options": [ { "id", "label", "description" } ] } ] }` |
 | `tessera_claude.get_hint` | `{ "session": "sab5" }` | `{ "h", "name", "state", "detail" }` |
 | `tessera_claude.answer` | `{ "question": "qab7", "rev": 41, "answers": { "p0": ["o1"], "p1": ["o0", "o2"] }, "display": "kitchen" }` | `{ "accepted": true }` or `{ "accepted": false, "reason": "answered|stale|cancelled|ended|unknown|bad_answer", "by": "display|pc" }` |
-| `tessera_claude.get_background` | – | `{ "tasks": [ { "title", "kind", "session", "at", "hm", "done", "total", "note" } ] }`, newest first, at most 10; `done` -1 and `total` 0 while unknown, `note` `""` for none |
+| `tessera_claude.get_background` | – | `{ "tasks": [ { "title", "kind", "session", "at", "hm", "done", "total", "note", "calls" } ] }`, newest first, at most 10; `done` -1 and `total` 0 while unknown, `note` `""` for none, `calls` -1 while unknown |
 | `tessera_claude.set_notify` | `{ "mode": "speech|tone|none" }` | `{ "notify": "speech|tone|none" }` (stored in the entry's options, the same value as the options form) |
 
 An answer is checked before it counts: every part answered, one option for a single choice, only option ids that
@@ -106,7 +106,7 @@ later one (a second display, a double tap, the PC) is refused with the reason.
 | Entity | State | Attributes |
 |---|---|---|
 | `sensor.claude_sessions` | sessions alive | `rev`, `event` (`question:qab7` / `hint:sab5`, changes with every new one), `event_rev`, `open`, and parallel lists of at most 12 sessions, asking ones first: `h`, `names` (≤24 chars), `states`, `ctx` (-1 unknown), `asks`, `q` (the first open question's handle, `""` for none); `active` (sessions working, asking or waiting for approval; a lost one is not), `active_since` (epoch since which the oldest of them is active without a break, 0 for none), `last_active` (epoch of the last activity, 0 for none); the limits `l5h`, `l5h_at` (epoch), `lwk`, `lwk_at`, `lx_names`, `lx`; `notify` (`speech`, `tone` or `none`, the announce mode) |
-| `sensor.claude_background` | background tasks | parallel lists, newest first, at most 10: `bg_titles`, `bg_kinds`, `bg_sess`, `bg_at` (epoch), `bg_hm` (local `HH:MM`), `bg_done` (-1 unknown), `bg_total` (0 unknown) |
+| `sensor.claude_background` | background tasks | parallel lists, newest first, at most 10: `bg_titles`, `bg_kinds`, `bg_sess`, `bg_at` (epoch), `bg_hm` (local `HH:MM`), `bg_done` (-1 unknown), `bg_total` (0 unknown), `bg_calls` (an agent's tool calls, -1 unknown) |
 | `sensor.claude_questions` | open questions | `questions` (handle, session, text), `event`, `event_rev` |
 | `sensor.claude_limit_5h`, `sensor.claude_limit_week` | percent used, `unknown` until reported | `resets_at`, `resets_in` |
 | `sensor.claude_5h_reset` | `1h 09m` | `resets_at` |

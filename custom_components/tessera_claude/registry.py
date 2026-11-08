@@ -285,7 +285,8 @@ class Registry:
     def _take_tasks(session: Session, reported: Any, now: float) -> None:
         """The session's background tasks from its report. Each comes with its age in seconds (the PC's clock is not
         this one); a task already known keeps its start, so the time does not wander with every report. Its progress
-        (`done` of `total`, and a short `note`) is taken from every report anew."""
+        (`done` of `total`, and a short `note`) and an agent's tool calls so far (`calls`) are taken from every report
+        anew."""
         known = {t["id"]: t for t in session.tasks or []}
         tasks: list[dict[str, Any]] = []
         for raw in reported if isinstance(reported, list) else []:
@@ -299,6 +300,7 @@ class Registry:
             kind = _text(raw.get("kind"))
             before = known.get(task_id)
             done, total = _progress(raw)
+            calls = _count(raw.get("calls"))
             tasks.append(
                 {
                     "id": task_id,
@@ -308,6 +310,7 @@ class Registry:
                     "done": done,
                     "total": total,
                     "note": _text(raw.get("note"), NOTE_LIMIT),
+                    "calls": calls if calls is not None and calls >= 0 else None,
                 }
             )
         session.tasks = tasks[-TASK_LIMIT:]
