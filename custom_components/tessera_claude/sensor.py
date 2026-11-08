@@ -140,6 +140,8 @@ class SessionsSensor(ClaudeSensor):
 
     _attr_icon = "mdi:robot"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    # The registry's revision moves with every report: nothing worth a row in the recorder.
+    _unrecorded_attributes = frozenset({"rev"})
 
     def __init__(self, registry: Registry, announcer: Announcer) -> None:
         super().__init__(registry, "claude_sessions", "Claude Sessions")
@@ -275,6 +277,8 @@ class BackgroundSensor(ClaudeSensor):
 
     _attr_icon = "mdi:progress-clock"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    # The lists change with every step and tool call of an agent: the screen reads them live, the recorder keeps none.
+    _unrecorded_attributes = frozenset({"bg_titles", "bg_kinds", "bg_sess", "bg_at", "bg_hm", "bg_done", "bg_total", "bg_calls"})
 
     def __init__(self, registry: Registry) -> None:
         super().__init__(registry, "claude_background", "Claude Background")

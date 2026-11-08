@@ -14,6 +14,7 @@ open question to land on.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import secrets
 import string
 from typing import Any, Callable
@@ -35,6 +36,12 @@ TITLE_LIMIT = 48
 # The longest progress note of a background task.
 NOTE_LIMIT = 40
 TASK_KINDS = ("shell", "agent", "monitor", "workflow")
+# A report's task list is read this far, however long it is.
+TASK_READ_LIMIT = TASK_LIMIT * 4
+# The longest age a task is taken with (a day, as the mod keeps a task at most), and the highest counts.
+AGE_LIMIT = 24 * 3600
+PROGRESS_LIMIT = 10_000
+CALLS_LIMIT = 1_000_000
 
 STATE_ORDER = {"asking": 0, "permission": 1, "working": 2, "idle": 3, "lost": 4, "ended": 5}
 # The states in which a session does something or waits for the person: what the activity tile counts.
@@ -146,14 +153,25 @@ def _text(value: Any, limit: int | None = None) -> str:
     return text
 
 
-def _count(value: Any) -> int | None:
-    """A whole number as reported: a bool or a float is none."""
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+def _count(value: Any, limit: int) -> int | None:
+    """A whole number as reported, at most `limit`: a bool or a float is none."""
+    return min(value, limit) if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _age(value: Any) -> float:
+    """A task's age in seconds, 0..AGE_LIMIT: one that is no finite number is 0 (an int is clamped before it becomes a
+    float, which a huge one could not)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    if isinstance(value, float) and not math.isfinite(value):
+        return 0.0
+    return float(min(max(value, 0), AGE_LIMIT))
 
 
 def _progress(raw: dict[str, Any]) -> tuple[int | None, int | None]:
-    """(done, total) of a task when both are sound (total >= 1, 0 <= done <= total), else (None, None)."""
-    done, total = _count(raw.get("done")), _count(raw.get("total"))
+    """(done, total) of a task when both are sound (total >= 1, 0 <= done <= total, each at most PROGRESS_LIMIT), else
+    (None, None)."""
+    done, total = _count(raw.get("done"), PROGRESS_LIMIT), _count(raw.get("total"), PROGRESS_LIMIT)
     if done is None or total is None or total < 1 or not 0 <= done <= total:
         return None, None
     return done, total
@@ -286,21 +304,22 @@ class Registry:
         """The session's background tasks from its report. Each comes with its age in seconds (the PC's clock is not
         this one); a task already known keeps its start, so the time does not wander with every report. Its progress
         (`done` of `total`, and a short `note`) and an agent's tool calls so far (`calls`) are taken from every report
-        anew."""
+        anew. Only the first TASK_READ_LIMIT entries are read."""
         known = {t["id"]: t for t in session.tasks or []}
         tasks: list[dict[str, Any]] = []
-        for raw in reported if isinstance(reported, list) else []:
+        seen: set[str] = set()
+        for raw in reported[:TASK_READ_LIMIT] if isinstance(reported, list) else []:
             if not isinstance(raw, dict):
                 continue
             task_id = _text(raw.get("id"), 64)
-            if not task_id or any(t["id"] == task_id for t in tasks):
+            if not task_id or task_id in seen:
                 continue
-            age = raw.get("age")
-            age = float(age) if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0 else 0.0
+            seen.add(task_id)
+            age = _age(raw.get("age"))
             kind = _text(raw.get("kind"))
             before = known.get(task_id)
             done, total = _progress(raw)
-            calls = _count(raw.get("calls"))
+            calls = _count(raw.get("calls"), CALLS_LIMIT)
             tasks.append(
                 {
                     "id": task_id,

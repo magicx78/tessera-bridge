@@ -1,6 +1,6 @@
 import type { AgentInfo, SessionRateLimit } from 'claude-code'
 
-import { AGENT_OVER, type BackgroundKind, type BackgroundStart, MAX_TASKS, type Progress, TASK_MAX_AGE_MS } from './background'
+import { AGENT_OVER, type BackgroundKind, type BackgroundStart, CALLS_MAX, MAX_TASKS, type Progress, TASK_MAX_AGE_MS } from './background'
 import { baseName, describeCall } from './describe'
 import { apiCall, quietly, type HaConfig, type Json } from './ha'
 import type { Host } from './host'
@@ -71,7 +71,12 @@ type BackgroundTask = {
    * of an agent that never reports a step: that it is busy, not how far along.
    */
   calls?: number
+  /** The agent whose loop started the task; absent for the main loop's. The task ends with that agent. */
+  owner?: string
 }
+
+/** The kinds that give way first when a session has more tasks than it reports. */
+const EVICT_FIRST = new Set<BackgroundKind>(['shell', 'monitor'])
 
 type Waiter = (status: QuestionStatus) => void
 
@@ -166,15 +171,28 @@ export class SessionBridge {
     }
   }
 
-  /** A background task started; the oldest give way beyond MAX_TASKS. */
-  startTask(task: BackgroundStart, now: number) {
+  /** A background task started, in the main loop or in agent `owner`'s; beyond MAX_TASKS others give way (`evict`). */
+  startTask(task: BackgroundStart, now: number, owner?: string) {
     this.tasks.delete(task.id)
-    this.tasks.set(task.id, { kind: task.kind, title: task.title, startedAt: now, ...(task.kind === 'agent' ? { calls: 0 } : {}) })
-    for (const id of this.tasks.keys()) {
-      if (this.tasks.size <= MAX_TASKS) break
-      this.endTask(id)
-    }
+    this.tasks.set(task.id, {
+      kind: task.kind,
+      title: task.title,
+      startedAt: now,
+      ...(task.kind === 'agent' ? { calls: 0 } : {}),
+      ...(owner ? { owner } : {}),
+    })
+    while (this.tasks.size > MAX_TASKS) this.endTask(this.evictee(now))
     this.touch()
+  }
+
+  /**
+   * The task that gives way when there are too many: one past TASK_MAX_AGE_MS, else the oldest shell or monitor (an
+   * agent's shells often outnumber it, and its steps would go with it), else the oldest of all.
+   */
+  private evictee(now: number): string {
+    const all = Array.from(this.tasks)
+    const pick = all.find(([, t]) => now - t.startedAt >= TASK_MAX_AGE_MS) ?? all.find(([, t]) => EVICT_FIRST.has(t.kind)) ?? all[0]
+    return pick![0]
   }
 
   /**
@@ -189,19 +207,23 @@ export class SessionBridge {
     return true
   }
 
-  /** A background agent asked for a tool other than a step report; a task this session does not know is left be. */
+  /**
+   * A tool call of a background agent ran (a step report is none); a task this session does not know is left be. Not
+   * worth a report of its own: the count rides on the next one, the heartbeat at the latest.
+   */
   countCall(id: string): boolean {
     const task = this.tasks.get(id)
     if (!task || task.calls === undefined) return false
-    this.tasks.set(id, { ...task, calls: task.calls + 1 })
-    this.touch()
+    this.tasks.set(id, { ...task, calls: Math.min(task.calls + 1, CALLS_MAX) })
     return true
   }
 
-  /** A background task ended, was stopped or failed. */
+  /** A background task ended, was stopped or failed; the tasks its loop started end with it. */
   endTask(id: string) {
     for (const ids of this.listed.values()) ids.delete(id)
-    if (this.tasks.delete(id)) this.touch()
+    if (!this.tasks.delete(id)) return
+    this.touch()
+    for (const [child, task] of Array.from(this.tasks)) if (task.owner === id) this.endTask(child)
   }
 
   /**
@@ -265,6 +287,8 @@ export class SessionBridge {
   async tick(host: Host) {
     await this.sweepAgents(host)
     const now = await host.now()
+    // A task not heard of for a day is taken as gone: out of the map, so it holds no place and no agent sweep.
+    for (const [id, task] of Array.from(this.tasks)) if (now - task.startedAt >= TASK_MAX_AGE_MS) this.endTask(id)
     const due = now - this.lastReportAt >= HEARTBEAT_MS
     if (this.dirty || this.questions.size > 0 || due) await this.report(host)
   }

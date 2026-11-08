@@ -4,7 +4,7 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.10
+version: 0.1.11
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
 api: "0.18"
 icon: robot
@@ -52,9 +52,10 @@ tiles:
   - id: activity
     name: tile_activity_name
     icon: robot
-    sizes: { min: 1x1, max: 2x2 }
-    # The words and numbers, and the parts of the busiest motion (the spark: 25 dots).
-    memory: 3400
+    sizes: { min: 1x1, max: 2x3 }
+    # The words and numbers (about 1400), and the parts of the busiest motion in the tallest room: the mosaic's 56
+    # stones (7 x 8, at 80 each; the muncher's 6 lanes need 48 parts, the spark's 2 sparks 50).
+    memory: 5900
     domains: [sensor]
     has_attributes: [h, states]
     attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, active, active_since,
@@ -96,7 +97,7 @@ tiles:
     memory: 3000
     domains: [sensor]
     has_attributes: [bg_titles]
-    attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm, bg_done, bg_total]
+    attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm, bg_done, bg_total, bg_calls]
     example: tile_background_example
     preview: { title: "{name}", value: "{state}" }
 

@@ -4,7 +4,10 @@ import type { TestBody } from 'claude-code/testing'
 
 import { backgroundStart, endedTasks, progressReport, stoppedTask } from '../hooks/background'
 import { baseName, describeCall } from '../hooks/describe'
+import { readConfig } from '../hooks/ha'
+import type { Host } from '../hooks/host'
 import { toReported, toToolAnswers } from '../hooks/questions'
+import { SessionBridge } from '../hooks/session'
 
 const OPTIONS = {
   haUrl: 'http://ha.test:8123',
@@ -24,9 +27,11 @@ function mockHa(on: Parameters<TestBody>[1]) {
   const calls: Call[] = []
   const ha = {
     calls,
-    questions: {} as Record<string, Status>,
+    questions: {} as Record<string, Status | null>,
     claim: { accepted: true } as Record<string, unknown>,
     down: false,
+    /** Makes `$.session.id` fail, for bookkeeping that breaks after a tool ran. */
+    idFails: false,
     /** Every line the mod sent to ui.log. */
     logs: [] as string[],
     cwd: '/home/me/projects/garden',
@@ -44,9 +49,9 @@ function mockHa(on: Parameters<TestBody>[1]) {
     if (ha.down) return { value: { status: 503, ok: false, headers: {}, text: '' } }
     let reply: unknown = { ok: true }
     if (path.endsWith('/report')) {
-      const statuses: Record<string, Status> = {}
+      const statuses: Record<string, Status | null> = {}
       for (const q of (body.questions as Array<{ id: string; nonce: string }>) ?? []) {
-        statuses[q.id] = ha.questions[q.id] ?? { status: 'open' }
+        statuses[q.id] = q.id in ha.questions ? ha.questions[q.id]! : { status: 'open' }
       }
       reply = { ok: true, handle: 's1', questions: statuses }
     } else if (path.endsWith('/claim')) {
@@ -60,7 +65,10 @@ function mockHa(on: Parameters<TestBody>[1]) {
     return { value: undefined }
   })
   on('ui.toast', () => ({ value: undefined }))
-  on('session.id', () => ({ value: 'session-aaaa' }))
+  on('session.id', () => {
+    if (ha.idFails) throw new Error('no session id')
+    return { value: 'session-aaaa' }
+  })
   on('session.cwd', () => ({ value: ha.cwd }))
   on('session.model', () => ({ value: 'claude' }))
   on('session.usage', () => ({ value: { context: { window: 1_000_000, tokens: 50_000, percent: 5 }, rateLimits: [] } }))
@@ -445,18 +453,18 @@ test("a background agent's progress comes from its loop's model response, whoeve
   ])
   await clock.advance(2_000)
   expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
-  // Its other tool calls are counted, the step reports are not work: what shows when an agent reports no steps.
-  expect(task().calls).toBe(1)
+  // A call the response asks for is no call that ran: the tool.call hook counts those.
+  expect(task().calls).toBe(0)
 
   await modelStep('a1', [{ name: 'Bash', input: { command: 'ls' } }, { name: 'mcp__savvy-progress__step', input: { done: 3, total: 5 } }])
   await clock.advance(2_000)
-  expect([task().done, task().total, task().note, task().calls]).toEqual([3, 5, '', 2])
+  expect([task().done, task().total, task().note, task().calls]).toEqual([3, 5, '', 0])
 
   // Another loop's responses, or the main loop's, are not this task's.
   await modelStep('zz', [{ name: 'Bash', input: {} }, { name: 'mcp__clawd-hq__step', input: { done: 4, total: 5 } }])
   await modelStep(undefined, [{ name: 'Bash', input: {} }, { name: 'mcp__clawd-hq__step', input: { done: 4, total: 5 } }])
   await clock.advance(2_000)
-  expect([task().done, task().calls]).toEqual([3, 2])
+  expect([task().done, task().calls]).toEqual([3, 0])
 })
 
 test('a shell has no tool calls to count', { options: OPTIONS }, async ($, on) => {
@@ -739,4 +747,179 @@ test('the session takes the name of the folder it moved into', { options: OPTION
   await clock.advance(2_000)
   expect(ha.lastReport()?.name).toBe('garden')
   expect(ha.lastReport()?.cwd).toBe('C:\\Users\\me\\projects\\garden')
+})
+
+test('a step report is bounded as the integration bounds it', () => {
+  expect(progressReport('mcp__clawd-hq__step', { done: 20_000, total: 30_000 })).toEqual({ done: 10_000, total: 10_000 })
+  expect(progressReport('mcp__clawd-hq__step', { done: 5, total: 1e30 })).toEqual({ done: 5, total: 10_000 })
+  expect(progressReport('mcp__clawd-hq__step', { done: 1e30, total: 5 })).toBe(null)
+  expect(progressReport('mcp__clawd-hq__step', { done: 1, total: Infinity })).toBe(null)
+})
+
+/** A host for a SessionBridge on its own: a clock that says `clock.now`, an agent list, a Home Assistant that answers. */
+function bareHost(clock: { now: number }): Host {
+  return {
+    fetch: async () => ({ status: 200, ok: true, headers: {}, text: '{"ok": true}' }),
+    now: async () => clock.now,
+    after: () => ({ cancel: () => {} }),
+    every: () => ({ cancel: () => {} }),
+    log: () => {},
+    toast: () => {},
+    storeGet: async () => undefined,
+    storeSet: async () => {},
+    sessionId: async () => 's',
+    cwd: async () => '/x',
+    model: async () => 'claude',
+    usage: async () => ({ context: { window: 1, tokens: 0, percent: 0 }, rateLimits: [] }),
+    agents: async () => [],
+  } as unknown as Host
+}
+
+test("an agent's tool calls stop counting at a million", () => {
+  const s = new SessionBridge('i', 's', readConfig(OPTIONS))
+  s.startTask({ id: 'a1', kind: 'agent', title: 'x' }, 0)
+  s.tasks.set('a1', { ...s.tasks.get('a1')!, calls: 999_999 })
+  s.countCall('a1')
+  s.countCall('a1')
+  expect(s.tasks.get('a1')?.calls).toBe(1_000_000)
+})
+
+test('a task past a day is gone from the session at the tick, not only from the report', async () => {
+  const clock = { now: 0 }
+  const s = new SessionBridge('i', 's', readConfig(OPTIONS))
+  s.startTask({ id: 'b1', kind: 'shell', title: 'old' }, 0)
+  clock.now = 3_600_000
+  s.startTask({ id: 'b2', kind: 'shell', title: 'young' }, clock.now)
+  clock.now = 24 * 3_600_000 + 1
+  await s.tick(bareHost(clock))
+  expect(Array.from(s.tasks.keys())).toEqual(['b2'])
+})
+
+test("an agent's background shells and monitors never push it out, and end with it", { options: OPTIONS }, async ($, on) => {
+  let n = 0
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `s${++n}` } }))
+  on('tool.call', { tool: 'Monitor' }, () => ({ result: { taskId: `m${++n}` } }))
+  const { clock, ha, modelStep } = await withAgent($, on)
+  for (let i = 0; i < 6; i++) await $.tool.call({ tool: 'Bash', command: 'sleep 99', run_in_background: true, agentId: 'a1', tool_use_id: `u${i}` })
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Monitor', command: 'tail -f log', description: 'Watch', agentId: 'a1', tool_use_id: `v${i}` })
+  await clock.advance(2_000)
+  // Ten tasks for eight places: the oldest shells give way, not the agent.
+  expect(taskIds(ha)).toEqual(['a1', 's3', 's4', 's5', 's6', 'm7', 'm8', 'm9'])
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 1, total: 3 } }])
+  await clock.advance(2_000)
+  const agent = (ha.lastReport()?.tasks as Array<Record<string, unknown>>).find(t => t.id === 'a1')!
+  expect([agent.done, agent.total]).toEqual([1, 3])
+
+  // The main loop's own shell is nobody's child; the agent's end takes its shells and monitors with it.
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true, tool_use_id: 'main1' })
+  await $.prompt.submit({
+    text: '<task-notification><task-id>a1</task-id><status>completed</status></task-notification>',
+    origin: { kind: 'task-notification' },
+  })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['s10'])
+})
+
+test("an agent's calls count once each, and only the ones that ran", { options: OPTIONS }, async ($, on) => {
+  on('tool.call', { tool: 'Read' }, () => ({ result: { type: 'text' } }))
+  on('tool.call', { tool: 'Write' }, () => ({ deny: 'refused' }))
+  const { clock, task, modelStep } = await withAgent($, on)
+  // The response asks for a Read and a step: nothing counted yet.
+  await modelStep('a1', [
+    { name: 'Read', input: { file_path: 'a.md' } },
+    { name: 'Write', input: { file_path: 'a.md' } },
+    { name: 'mcp__clawd-hq__step', input: { done: 1, total: 2 } },
+  ])
+  await $.tool.call({ tool: 'Read', file_path: 'a.md', agentId: 'a1', tool_use_id: 'r1' })
+  // A refused call, the step tool's own call, another loop's and the main loop's: none of them is the agent's work.
+  await $.tool.call({ tool: 'Write', file_path: 'a.md', content: '', agentId: 'a1', tool_use_id: 'r2' })
+  await $.tool.call({ tool: 'mcp__clawd-hq__step', done: 2, total: 2, agentId: 'a1', tool_use_id: 'r3' })
+  await $.tool.call({ tool: 'Read', file_path: 'a.md', agentId: 'zz', tool_use_id: 'r4' })
+  await $.tool.call({ tool: 'Read', file_path: 'a.md', tool_use_id: 'r5' })
+  await clock.advance(16_000)
+  expect(task().calls).toBe(1)
+})
+
+test('a counted call rides on the heartbeat; a step is reported at once', { options: OPTIONS }, async ($, on) => {
+  on('tool.call', { tool: 'Read' }, () => ({ result: { type: 'text' } }))
+  const { clock, ha, task, modelStep } = await withAgent($, on)
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 1, total: 3 } }])
+  await clock.advance(2_000)
+  const before = ha.reports().length
+  await $.tool.call({ tool: 'Read', file_path: 'a.md', agentId: 'a1', tool_use_id: 'r1' })
+  await clock.advance(3_000)
+  expect(ha.reports().length).toBe(before)
+  await clock.advance(13_000)
+  expect(task().calls).toBe(1)
+  const later = ha.reports().length
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 2, total: 3 } }])
+  await clock.advance(2_000)
+  expect(ha.reports().length).toBe(later + 1)
+  expect(task().done).toBe(2)
+})
+
+test('a step hook that fails says so once, and the step stands', { options: OPTIONS }, async ($, on) => {
+  const { ha, modelStep } = await withAgent($, on)
+  await modelStep('a1', [null] as never)
+  await modelStep('a1', [null] as never)
+  expect(failed(ha, 'turn.step').length).toBe(1)
+})
+
+const failed = (ha: ReturnType<typeof mockHa>, where: string) => ha.logs.filter(l => l.startsWith(`tessera-bridge: ${where} failed`))
+
+test('a tool runs once when the bookkeeping after it fails, and the failure is said', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  let runs = 0
+  on('tool.call', { tool: 'Bash' }, () => {
+    runs += 1
+    return { result: { stdout: 'ok', stderr: '', interrupted: false, backgroundTaskId: `b${runs}` } }
+  })
+  await start($)
+  ha.idFails = true
+  const ran = (await $.tool.call({ tool: 'Bash', command: 'ls', run_in_background: true, tool_use_id: 't1' })) as { result?: { stdout?: string } }
+  await $.tool.call({ tool: 'Bash', command: 'ls', run_in_background: true, tool_use_id: 't2' })
+  ha.idFails = false
+  await clock.advance(2_000)
+  expect(runs).toBe(2)
+  expect(ran.result?.stdout).toBe('ok')
+  expect(failed(ha, 'tool.call').length).toBe(1)
+})
+
+test('a check runs once when the bookkeeping after it fails, and the failure is said', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  let checks = 0
+  on('tool.check', () => {
+    checks += 1
+    return { decision: 'ask', reason: 'mode' }
+  })
+  await start($)
+  ha.idFails = true
+  const verdict = await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 't2' })
+  ha.idFails = false
+  await clock.advance(2_000)
+  expect(checks).toBe(1)
+  expect(verdict.decision).toBe('ask')
+  expect(failed(ha, 'tool.check').length).toBe(1)
+})
+
+test('a question opens one dialog when the bookkeeping after it fails, and is not left open', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  let dialogs = 0
+  on('tool.call', { tool: 'AskUserQuestion' }, () => {
+    dialogs += 1
+    return { result: { questions: [], answers: { 'Weiter machen?': 'Ja' } } }
+  })
+  await start($)
+  // A reply the mod cannot read breaks the report of the question, after the dialog was opened.
+  ha.questions['toolu_q20'] = null
+  const result = (await $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q20' })) as Answered
+  delete ha.questions['toolu_q20']
+  await clock.advance(2_000)
+  expect(dialogs).toBe(1)
+  expect(result.result?.answers).toEqual({ 'Weiter machen?': 'Ja' })
+  expect(failed(ha, 'AskUserQuestion').length).toBe(1)
+  expect(ha.lastReport()?.state).toBe('idle')
 })

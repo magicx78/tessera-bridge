@@ -409,5 +409,41 @@ def test_background_note_is_cut_and_only_text():
     assert by_id["odd"]["note"] == ""
 
 
+
+@pytest.mark.parametrize("age, started", [(1e11, 100 - 86400), (10**400, 100 - 86400), (float("inf"), 100), (float("nan"), 100), (-5, 100), (90, 10)])
+def test_background_age_is_finite_and_at_most_a_day(age, started):
+    """An age past a day (or none a clock can hold) would make a start no datetime can show."""
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "a1", "title": "t", "age": age}]), now=100)
+    assert r.background(100)[0]["started"] == started
+
+
+@pytest.mark.parametrize(
+    "done, total, kept",
+    [(10**30, 10**30, (10000, 10000)), (5, 10**30, (5, 10000)), (10**30, 5, (None, None)), (10000, 10000, (10000, 10000))],
+)
+def test_background_progress_is_bounded(done, total, kept):
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "a1", "title": "t", "done": done, "total": total}]), now=100)
+    row = r.background(100)[0]
+    assert (row["done"], row["total"]) == kept
+
+
+def test_background_tool_calls_are_bounded():
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "working", tasks=[{"id": "a1", "title": "t", "calls": 10**30}]), now=100)
+    assert r.background(100)[0]["calls"] == 1_000_000
+
+
+def test_a_long_task_list_is_read_only_so_far():
+    """A report with thousands of tasks costs no more than its first TASK_LIMIT * 4; duplicates count once."""
+    r = Registry()
+    tasks = [{"id": "dup", "title": "first"}, {"id": "dup", "title": "second"}] + [{"id": f"t{i}", "title": "t"} for i in range(5000)]
+    r.report(report("pc1", "a", 1, "A", "working", tasks=tasks), now=100)
+    ids = {t["id"] for t in r.background(100)}
+    # The first 32 entries are read: dup (twice) and t0..t29; the newest 8 of them stay.
+    assert ids == {f"t{i}" for i in range(22, 30)}
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))

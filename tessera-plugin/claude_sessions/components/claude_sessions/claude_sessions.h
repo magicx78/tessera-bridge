@@ -47,6 +47,8 @@ struct BackgroundRow {
   uint32_t at = 0;
   // Steps the task reported through the mod: -1 and 0 while unknown.
   int done = -1, total = 0;
+  // An agent's tool calls so far (integration 0.2.6): -1 while unknown, for a shell, or from an older integration.
+  int calls = -1;
   // What the task said last (only in the get_background answer; "" when none).
   char note[124] = "";
 };

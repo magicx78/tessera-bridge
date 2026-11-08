@@ -13,6 +13,9 @@ export const TASK_MAX_AGE_MS = 24 * 3600_000
 
 const TITLE_MAX = 80
 const NOTE_MAX = 80
+/** The highest step count and tool-call count reported, as the integration bounds them too. */
+export const PROGRESS_MAX = 10_000
+export const CALLS_MAX = 1_000_000
 
 function oneLine(text: string, limit = TITLE_MAX): string {
   const line = text.replace(/\s+/g, ' ').trim()
@@ -99,9 +102,11 @@ export const PROGRESS_TOOLS = new Set(['mcp__clawd-hq__step', 'mcp__savvy-progre
 export function progressReport(tool: string, input: unknown): Progress | null {
   if (!PROGRESS_TOOLS.has(tool)) return null
   const i = (input ?? {}) as Record<string, unknown>
-  const { done, total } = i
-  if (typeof done !== 'number' || typeof total !== 'number') return null
-  if (!Number.isInteger(done) || !Number.isInteger(total) || total < 1 || done < 0 || done > total) return null
+  if (typeof i.done !== 'number' || typeof i.total !== 'number') return null
+  if (!Number.isInteger(i.done) || !Number.isInteger(i.total)) return null
+  const done = Math.min(i.done, PROGRESS_MAX)
+  const total = Math.min(i.total, PROGRESS_MAX)
+  if (total < 1 || done < 0 || done > total) return null
   const note = typeof i.note === 'string' ? oneLine(i.note, NOTE_MAX) : ''
   return note ? { done, total, note } : { done, total }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11
+- The activity tile can be 2x3 (and 1x3), and its animation grows with the tile: on a wide tile the picture fills the whole right half from under the head to the bottom edge. The mosaic lays as many square stones as the room holds (more rows on a tall tile), the muncher gets a lane for each stretch of height, and the spark takes the height (two sparks on a tall tile). 1x1, 2x1 and narrow tiles look as before. Nothing to do; place the tile as 2x3 in the layout editor if you want it taller.
+- The card "Claude in the background" shows how many actions (tool calls) an agent has made so far, "5 actions", when it reports neither steps nor a note, instead of "no progress reported". Shells, and agents with steps or a note, look as before. Needs the integration 0.2.6 (the sensor's `bg_calls`); with an older integration the card looks as before.
+
 ## 0.1.10
 - The two popup switches ("Popup on a question", "Popup on a permission hint") take effect at once, whether switched on the glass or in Home Assistant: off closes a popup of that kind that is open and drops a request still on its way, so no popup opens a moment later; on shows what waits right now (a question only while one is open, even after a later hint). Nothing to do.
 - A new settings row "Announce" ("Ansage"): Speech, Tone or Nothing, for a new question or permission hint. The choice is kept by the integration and shows at once on every screen. Needs the integration 0.2.5 (service `set_notify`, the sensor's `notify` attribute); with an older integration the row shows "Speech" and a choice does nothing.

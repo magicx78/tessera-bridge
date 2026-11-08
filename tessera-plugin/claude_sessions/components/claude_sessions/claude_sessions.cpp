@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 #include <string>
 
 namespace esphome::claude_sessions {
@@ -430,11 +431,21 @@ static MotionKind motion_kind(const char *value) {
 
 class TileMotion {
  public:
-  static constexpr int COLS = 5, ROWS = 3, CELLS = COLS * ROWS;  // the mosaic
-  static constexpr int STONES = 5;                               // the muncher's row
-  static constexpr int ARMS = 8, DOTS = 3;                       // the spark
+  static constexpr int STONES = 5;                 // the muncher's row
+  static constexpr int ARMS = 8, DOTS = 3;         // the spark
+  static constexpr int LANE = STONES + 3;          // one muncher lane: body, mouth, eye and its stones
+  static constexpr int SPARK = 1 + ARMS * DOTS;    // one spark: its core and its dots
+  static constexpr int CLASSIC = 15;               // the mosaic of a small room: 5 x 3 stones
+  // The most a room can ask: the mosaic 7 x 8 stones, 6 muncher lanes, 2 sparks. The tile makes only what its biggest
+  // room needs, so a small screen keeps few parts and the rest of this stays unused.
+  static constexpr int MAX_COLS = 7, MAX_ROWS = 8, MAX_LANES = 6, MAX_SPARKS = 2;
+  static constexpr int MAX_PARTS = MAX_COLS * MAX_ROWS;
+  static_assert(MAX_LANES * LANE <= MAX_PARTS && MAX_SPARKS * SPARK <= MAX_PARTS && CLASSIC <= MAX_PARTS,
+                "every motion's most parts fit one list");
 
-  void create(lv_obj_t *parent, MotionKind kind, const tessera::Plugin *plugin) {
+  // `wide`: the tile has the right half under its head for the picture, and `max_w` x `max_h` is the most that room
+  // can be (the tile's own size, with nothing grounded). Narrow tiles pass 0 x 0 and keep the small picture.
+  void create(lv_obj_t *parent, MotionKind kind, const tessera::Plugin *plugin, bool wide, int max_w, int max_h) {
     kind_ = kind;
     if (kind_ == MotionKind::NONE) return;
     room_ = lv_obj_create(parent);
@@ -443,17 +454,23 @@ class TileMotion {
     lv_obj_remove_flag(room_, LV_OBJ_FLAG_SCROLLABLE);
     sleep_ = plugin->text("sleep_mark");
     ask_ = plugin->text("ask_mark");
+    // Every part the biggest room can use, made now (objects are made only here) and hidden by place() when unused.
     if (kind_ == MotionKind::MOSAIC) {
-      for (int i = 0; i < CELLS; ++i) part_[i] = dot(theme::TRACK, false);
+      const Grid g = grid(max_w, max_h, wide, MAX_PARTS);
+      count_ = std::max(CLASSIC, g.cols * g.rows);
+      for (int i = 0; i < count_; ++i) part_[i] = dot(theme::TRACK, false);
     } else if (kind_ == MotionKind::CHOMPER) {
-      // The body, its mouth (a bite of the tile's own ground), its eye; the stones last, so the one in its mouth shows.
-      body_ = dot(theme::ACCENT, true);
-      mouth_ = dot(theme::CARD, true);
-      eye_ = dot(theme::CARD, true);
-      for (int i = 0; i < STONES; ++i) part_[i] = dot(theme::ACCENT, false);
+      count_ = lanes(max_w, max_h, wide) * LANE;
+      for (int l = 0; l < count_ / LANE; ++l) {
+        // The body, its mouth (a bite of the tile's own ground), its eye; the stones last, so the one in its mouth shows.
+        part_[l * LANE] = dot(theme::ACCENT, true);
+        part_[l * LANE + 1] = dot(theme::CARD, true);
+        part_[l * LANE + 2] = dot(theme::CARD, true);
+        for (int i = 0; i < STONES; ++i) part_[l * LANE + 3 + i] = dot(theme::ACCENT, false);
+      }
     } else {
-      body_ = dot(theme::ACCENT, true);  // the spark's core
-      for (int i = 0; i < ARMS * DOTS; ++i) part_[i] = dot(theme::ACCENT, true);
+      count_ = sparks(max_w, max_h, wide) * SPARK;
+      for (int i = 0; i < count_; ++i) part_[i] = dot(theme::ACCENT, true);  // each spark's core, then its arms' dots
     }
     // A sleeping "z z z", and the "?" of a question.
     mark_ = ui::label(room_, Font::BODY, theme::MUTED);
@@ -464,8 +481,10 @@ class TileMotion {
 
   bool on() const { return kind_ != MotionKind::NONE; }
 
-  // Where the picture stands on the tile; nothing when the room is too small for it.
-  void place(int x, int y, int w, int h) {
+  // Where the picture stands on the tile; nothing when the room is too small for it. `whole`: a wide tile's right
+  // half, which the picture fills (more rows, lanes or sparks as the room is tall); else the small picture of a
+  // narrow tile.
+  void place(int x, int y, int w, int h, bool whole) {
     if (!room_) return;
     const bool fits = w >= ui::px(28) && h >= ui::px(18);
     hide(room_, !fits);
@@ -474,9 +493,10 @@ class TileMotion {
       return;
     }
     lv_obj_set_pos(room_, x, y);
-    if (w == w_ && h == h_) return;
+    if (w == w_ && h == h_ && whole == whole_) return;
     w_ = w;
     h_ = h;
+    whole_ = whole;
     lv_obj_set_size(room_, w, h);
     layout();
   }
@@ -493,6 +513,54 @@ class TileMotion {
   }
 
  private:
+  // The mosaic's grid: square stones, `size` across, a `gap` apart at least. In a tall room (`spread`) as many rows
+  // as the room holds and as many columns as then fit, the stones spread so the grid fills the room to its edges;
+  // else the classic 5 x 3, as big as the room allows, in the middle.
+  struct Grid {
+    int cols = 5, rows = 3, size = 2, gap = 2;
+    bool spread = false;
+  };
+
+  static Grid grid(int w, int h, bool whole, int max_cells) {
+    Grid m;
+    const int g = std::max(2, ui::px(3));
+    const int s5 = (w - g * 4) / 5;  // a stone when five of them stand across
+    m.gap = g;
+    m.size = std::max(2, std::min(s5, (h - g * 2) / 3));
+    if (!whole || s5 < 2) return m;
+    const int unit = s5 + g;
+    if ((h + g) * 2 < unit * 7) return m;  // not even three and a half rows of those stones: the small picture
+    int rows = std::min(MAX_ROWS, ((h + g) * 2 + unit) / (unit * 2)), cols = 5, size = 2;
+    for (;;) {
+      const int size_h = (h - (rows - 1) * g) / rows;
+      cols = std::max(3, std::min(MAX_COLS, ((w + g) * 2 + size_h + g) / ((size_h + g) * 2)));
+      size = std::min(size_h, (w - (cols - 1) * g) / cols);
+      if (cols * rows <= max_cells || rows <= 3) break;
+      --rows;
+    }
+    if (cols * rows > max_cells || size < 2) return m;
+    m.cols = cols;
+    m.rows = rows;
+    m.size = size;
+    m.spread = true;
+    return m;
+  }
+
+  // How many muncher lanes the room holds (one in a low room), and how many sparks (one unless it is taller than wide).
+  static int lanes(int w, int h, bool whole) {
+    if (!whole || w <= 0) return 1;
+    const int lane = std::max(1, w * 2 / (2 * STONES + 3) * 13 / 10);  // a muncher and some air above and below
+    return std::max(1, std::min(MAX_LANES, (h * 2 + lane) / (lane * 2)));
+  }
+
+  static int sparks(int w, int h, bool whole) {
+    if (!whole || w <= 0) return 1;
+    return std::max(1, std::min(MAX_SPARKS, (h * 2 + w) / (w * 2)));
+  }
+
+  // Stone i of n along a room: the first at one edge, the last at the other.
+  static int spot(int i, int n, int room, int size) { return n > 1 ? i * (room - size) / (n - 1) : (room - size) / 2; }
+
   lv_obj_t *dot(theme::Role role, bool round) {
     lv_obj_t *o = ui::block(room_, role);
     lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
@@ -538,52 +606,75 @@ class TileMotion {
     return out;
   }
 
+  // The parts this room uses stand where they belong; the rest of those made stay hidden.
   void layout() {
     if (kind_ == MotionKind::MOSAIC) {
-      gap_ = std::max(2, ui::px(3));
-      size_ = std::max(2, std::min((w_ - gap_ * (COLS - 1)) / COLS, (h_ - gap_ * (ROWS - 1)) / ROWS));
-      x0_ = (w_ - (size_ * COLS + gap_ * (COLS - 1))) / 2;
-      y0_ = (h_ - (size_ * ROWS + gap_ * (ROWS - 1))) / 2;
-      for (int i = 0; i < CELLS; ++i) {
-        box(part_[i], x0_ + (i % COLS) * (size_ + gap_), y0_ + (i / COLS) * (size_ + gap_), size_, size_);
-        lv_obj_set_style_radius(part_[i], std::max(1, size_ / 5), 0);
+      grid_ = grid(w_, h_, whole_, count_);
+      const int n = grid_.cols * grid_.rows, g = grid_.gap, s = grid_.size;
+      const int x0 = (w_ - (s * grid_.cols + g * (grid_.cols - 1))) / 2, y0 = (h_ - (s * grid_.rows + g * (grid_.rows - 1))) / 2;
+      // A scattered order of the stones: a step through them that has no common divisor with their number.
+      step_ = std::max(1, n * 5 / 8);
+      while (std::gcd(step_, n) != 1) ++step_;
+      for (int i = 0; i < count_; ++i) {
+        hide(part_[i], i >= n);
+        if (i >= n) continue;
+        const int col = i % grid_.cols, row = i / grid_.cols;
+        box(part_[i], grid_.spread ? spot(col, grid_.cols, w_, s) : x0 + col * (s + g),
+            grid_.spread ? spot(row, grid_.rows, h_, s) : y0 + row * (s + g), s, s);
+        lv_obj_set_style_radius(part_[i], std::max(1, s / 5), 0);
       }
     } else if (kind_ == MotionKind::CHOMPER) {
-      // A pitch per stone; the body a little wider than a pitch, as high as the room allows.
-      pitch_ = std::min(w_ * 2 / (2 * STONES + 3), h_ * 10 / 11);
+      lanes_ = std::max(1, std::min(lanes(w_, h_, whole_), count_ / LANE));
+      // A pitch per stone; the body a little wider than a pitch, as high as its lane allows.
+      pitch_ = std::min(w_ * 2 / (2 * STONES + 3), h_ / lanes_ * 10 / 11);
       size_ = std::max(3, pitch_ * 2 / 5);
       radius_ = std::max(4, pitch_ * 11 / 20);
       x0_ = (w_ - pitch_ * (STONES + 1)) / 2 + pitch_ / 2;
-      y0_ = h_ / 2;
-      for (int i = 0; i < STONES; ++i) {
-        box(part_[i], x0_ + (i + 1) * pitch_ - size_ / 2, y0_ - size_ / 2, size_, size_);
-        lv_obj_set_style_radius(part_[i], std::max(1, size_ / 5), 0);
+      for (int i = 0; i < count_; ++i) hide(part_[i], i >= lanes_ * LANE);
+      for (int l = 0; l < lanes_; ++l) {
+        const int cy = (2 * l + 1) * h_ / (2 * lanes_);
+        for (int i = 0; i < STONES; ++i) {
+          lv_obj_t *s = part_[l * LANE + 3 + i];
+          box(s, x0_ + (i + 1) * pitch_ - size_ / 2, cy - size_ / 2, size_, size_);
+          lv_obj_set_style_radius(s, std::max(1, size_ / 5), 0);
+        }
       }
     } else {
-      radius_ = std::max(6, std::min(w_, h_) * 23 / 50);
+      sparks_ = std::max(1, std::min(sparks(w_, h_, whole_), count_ / SPARK));
+      // Round, as big as the room's narrower side allows; in a tall room the arms reach further up and down.
+      const int cell = h_ / sparks_;
+      radius_ = std::max(6, std::min(w_, cell) * 23 / 50);
+      reach_ = whole_ ? std::max(radius_, cell * 23 / 50) : radius_;
+      for (int i = 0; i < count_; ++i) hide(part_[i], i >= sparks_ * SPARK);
     }
   }
 
   // Building a mosaic: a stone a second in a scattered order, then it starts anew.
   void mosaic() {
-    static const uint8_t ORDER[CELLS] = {7, 2, 12, 0, 9, 14, 4, 11, 1, 6, 13, 3, 10, 5, 8};
-    static const uint8_t SHADE[CELLS] = {255, 170, 220, 140, 200, 255, 160, 230, 190, 150, 240, 180, 210, 165, 245};
-    bool lit[CELLS] = {};
+    static const uint8_t ORDER[CLASSIC] = {7, 2, 12, 0, 9, 14, 4, 11, 1, 6, 13, 3, 10, 5, 8};
+    static const uint8_t SHADE[CLASSIC] = {255, 170, 220, 140, 200, 255, 160, 230, 190, 150, 240, 180, 210, 165, 245};
+    const int cols = grid_.cols, rows = grid_.rows, n = cols * rows;
+    // Stone j of the building order, and a stone's shade.
+    auto order = [&](int j) { return n == CLASSIC ? static_cast<int>(ORDER[j]) : j * step_ % n; };
+    auto shade = [&](int i) { return static_cast<lv_opa_t>(n == CLASSIC ? SHADE[i] : 160 + i * 37 % 96); };
+    bool lit[MAX_PARTS] = {};
     int filled = 0;
-    if (mood_ == Mood::WORK) filled = std::min<int>(frame_ % (CELLS + 3), CELLS);
-    else if (mood_ == Mood::WAIT) filled = 8;
-    for (int j = 0; j < filled; ++j) lit[ORDER[j]] = true;
-    for (int i = 0; i < CELLS; ++i) {
+    if (mood_ == Mood::WORK) filled = std::min<int>(frame_ % (n + 3), n);
+    else if (mood_ == Mood::WAIT) filled = n * 8 / CLASSIC;
+    for (int j = 0; j < filled; ++j) lit[order(j)] = true;
+    for (int i = 0; i < n; ++i) {
       lv_obj_t *c = part_[i];
+      const int col = i % cols, row = i / cols;
       if (mood_ == Mood::ASK) {
-        // A "!" of stones on the red ground, blinking.
-        const bool mark = i == 2 || i == 7 || i == 12;
+        // A "!" of stones on the red ground, blinking: the stem down the middle, a gap, the dot at the foot.
+        const bool middle = cols % 2 ? col == cols / 2 : col == cols / 2 - 1 || col == cols / 2;
+        const bool mark = middle && (rows <= 3 || row <= rows - 3 || row == rows - 1);
         fill(c, Tone::NORMAL, theme::ON_ACCENT, mark ? (blink() ? LV_OPA_COVER : LV_OPA_50) : LV_OPA_20);
       } else if (lit[i]) {
-        fill(c, Tone::ACCENT, theme::ACCENT, SHADE[i]);
-      } else if (mood_ == Mood::WAIT && i == ORDER[filled]) {
+        fill(c, Tone::ACCENT, theme::ACCENT, shade(i));
+      } else if (mood_ == Mood::WAIT && i == order(filled)) {
         fill(c, blink() ? Tone::BUSY : Tone::NORMAL, theme::TRACK);  // the next stone waits for the approval
-      } else if (mood_ == Mood::REST && i == 7 && (frame_ / 2) % 2 == 0) {
+      } else if (mood_ == Mood::REST && row == rows / 2 && col == cols / 2 && (frame_ / 2) % 2 == 0) {
         fill(c, Tone::NORMAL, theme::MUTED, LV_OPA_60);  // a cursor glimmering now and then
       } else {
         fill(c, Tone::NORMAL, theme::TRACK);
@@ -592,34 +683,48 @@ class TileMotion {
     hide(mark_, true);
   }
 
-  // The mosaic muncher: eats a stone a second, sleeps at rest, stands before a locked stone or a "?".
+  // The mosaic muncher: eats a stone a second, sleeps at rest, stands before a locked stone or a "?". In a tall room
+  // several lanes of it, each a few steps behind the one above.
   void chomper() {
+    const int with_mark = mood_ == Mood::ASK ? lanes_ / 2 : 0;  // the "?" over the middle lane, the "z z z" at the top
+    bool marked = false;
+    for (int l = 0; l < lanes_; ++l) marked = lane(l, l == with_mark) || marked;
+    if (!marked) hide(mark_, true);
+  }
+
+  // One lane. Returns whether it set the mark.
+  bool lane(int l, bool with_mark) {
+    lv_obj_t **p = part_ + l * LANE;
+    lv_obj_t *body = p[0], *mouth = p[1], *eye = p[2];
+    const int y0 = (2 * l + 1) * h_ / (2 * lanes_);
+    const uint32_t f = frame_ + static_cast<uint32_t>(l) * 3;
     int pos;  // the body's place in pitches: -1 (coming in) to STONES (gone)
-    if (mood_ == Mood::WORK) pos = static_cast<int>(frame_ % (STONES + 2)) - 1;
+    if (mood_ == Mood::WORK) pos = static_cast<int>(f % (STONES + 2)) - 1;
     else if (mood_ == Mood::REST) pos = -1;
     else pos = 0;
-    const bool open = mood_ == Mood::WORK && blink();
+    const bool open = mood_ == Mood::WORK && f % 2 == 0;
     const bool asleep = mood_ == Mood::REST;
     int r = asleep ? radius_ * 4 / 5 : radius_;
-    int cx = asleep ? r + ui::px(2) : x0_ + pos * pitch_, cy = asleep ? y0_ + r / 5 : y0_;
-    if (asleep) cx = std::max(cx, r);
-    box(body_, cx - r, cy - r, 2 * r, 2 * r);
-    fill(body_, asleep ? Tone::NORMAL : Tone::ACCENT, asleep ? theme::MUTED : theme::ACCENT);
+    int cx = asleep ? r + ui::px(2) : x0_ + pos * pitch_, cy = asleep ? y0 + r / 5 : y0;
+    // Asleep, or one of several lanes, the body stays inside the room (alone it may slide in from beyond its edge).
+    if (asleep || lanes_ > 1) cx = std::max(cx, r);
+    box(body, cx - r, cy - r, 2 * r, 2 * r);
+    fill(body, asleep ? Tone::NORMAL : Tone::ACCENT, asleep ? theme::MUTED : theme::ACCENT);
     // The mouth: a round bite of the ground at its front.
-    hide(mouth_, !open);
+    hide(mouth, !open);
     if (open) {
       const int b = r * 31 / 50;
-      box(mouth_, cx + r - b, cy - b, 2 * b, 2 * b);
-      ground_fill(mouth_);
+      box(mouth, cx + r - b, cy - b, 2 * b, 2 * b);
+      ground_fill(mouth);
     }
     // The eye: a dot, or a line while it sleeps.
     const int e = std::max(2, r / 4);
-    if (asleep) box(eye_, cx, cy - r / 2, r * 2 / 5, std::max(2, ui::px(2)));
-    else box(eye_, cx + r / 8, cy - r / 2 - e / 2, e, e);
-    ground_fill(eye_);
+    if (asleep) box(eye, cx, cy - r / 2, r * 2 / 5, std::max(2, ui::px(2)));
+    else box(eye, cx + r / 8, cy - r / 2 - e / 2, e, e);
+    ground_fill(eye);
     // The stones: eaten up to the body; at rest all of them, dim.
     for (int i = 0; i < STONES; ++i) {
-      lv_obj_t *s = part_[i];
+      lv_obj_t *s = p[3 + i];
       const bool eaten = !asleep && i < pos;
       const bool gate = (mood_ == Mood::WAIT || mood_ == Mood::ASK) && i == 0;  // the stone right before it
       hide(s, eaten || (mood_ == Mood::ASK && gate));
@@ -627,28 +732,42 @@ class TileMotion {
       else if (gate) fill(s, blink() ? Tone::BUSY : Tone::NORMAL, theme::TRACK);
       else fill(s, i % 2 ? Tone::ACCENT : Tone::NORMAL, i % 2 ? theme::ACCENT : theme::MUTED);
     }
+    if (!with_mark) return false;
     if (asleep) {
       mark(zzz(), cx + r, std::max(0, cy - r - ui::line_height(Font::BODY) / 2), Font::BODY, Tone::NORMAL, theme::MUTED);
-    } else if (mood_ == Mood::ASK) {
+      return true;
+    }
+    if (mood_ == Mood::ASK) {
       const int h = ui::line_height(Font::TITLE);
       const std::string ask = ask_.c_str();
       const int x = x0_ + pitch_ - ui::text_width(ask, Font::TITLE) / 2;
-      mark(ask, x, y0_ - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
-    } else {
-      hide(mark_, true);
+      mark(ask, x, y0 - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
+      return true;
     }
+    return false;
   }
 
   // The spark: eight arms of three dots. At work a wave runs round it; at rest it breathes; waiting, one arm points.
+  // In a tall room two of them, one above the other, each a few steps on.
   void spark() {
+    const int with_mark = mood_ == Mood::ASK ? sparks_ / 2 : 0;  // the "?" by the lower spark of two, the "z z z" up top
+    bool marked = false;
+    for (int k = 0; k < sparks_; ++k) marked = spark_one(k, k == with_mark) || marked;
+    if (!marked) hide(mark_, true);
+  }
+
+  // One spark. Returns whether it set the mark.
+  bool spark_one(int k, bool with_mark) {
     static const int16_t COS[ARMS] = {1000, 707, 0, -707, -1000, -707, 0, 707};
     static const int16_t SIN[ARMS] = {0, 707, 1000, 707, 0, -707, -1000, -707};
-    const int R = radius_, cx = w_ / 2, cy = h_ / 2;
+    lv_obj_t **p = part_ + k * SPARK;
+    const int R = radius_, RY = reach_, cx = w_ / 2, cy = (2 * k + 1) * h_ / (2 * sparks_);
     const int core = std::max(3, R * 3 / 10);
-    box(body_, cx - core / 2, cy - core / 2, core, core);
+    box(p[0], cx - core / 2, cy - core / 2, core, core);
     const bool rest = mood_ == Mood::REST;
-    fill(body_, rest ? Tone::NORMAL : Tone::ACCENT, rest ? theme::MUTED : theme::ACCENT);
-    const int lead = static_cast<int>(frame_ % ARMS);
+    fill(p[0], rest ? Tone::NORMAL : Tone::ACCENT, rest ? theme::MUTED : theme::ACCENT);
+    const uint32_t f = frame_ + static_cast<uint32_t>(k) * 3;
+    const int lead = static_cast<int>(f % ARMS);
     for (int a = 0; a < ARMS; ++a) {
       int reach;  // how many dots of this arm show
       Tone tone = Tone::ACCENT;
@@ -668,34 +787,40 @@ class TileMotion {
         role = theme::MUTED;
       }
       for (int d = 0; d < DOTS; ++d) {
-        lv_obj_t *o = part_[a * DOTS + d];
+        lv_obj_t *o = p[1 + a * DOTS + d];
         hide(o, d >= reach);
         if (d >= reach) continue;
-        const int dist = R * (3 + 3 * d) / 10, size = std::max(2, R * (26 - 4 * d) / 100);
-        box(o, cx + dist * COS[a] / 1000 - size / 2, cy + dist * SIN[a] / 1000 - size / 2, size, size);
+        const int dx = R * (3 + 3 * d) / 10, dy = RY * (3 + 3 * d) / 10, size = std::max(2, R * (26 - 4 * d) / 100);
+        box(o, cx + dx * COS[a] / 1000 - size / 2, cy + dy * SIN[a] / 1000 - size / 2, size, size);
         fill(o, tone, role);
       }
     }
+    if (!with_mark) return false;
     if (rest) {
-      mark(zzz(), cx + R / 2, std::max(0, cy - R - ui::line_height(Font::BODY) / 3), Font::BODY, Tone::NORMAL, theme::MUTED);
-    } else if (mood_ == Mood::ASK) {
+      mark(zzz(), cx + R / 2, std::max(0, cy - RY - ui::line_height(Font::BODY) / 3), Font::BODY, Tone::NORMAL, theme::MUTED);
+      return true;
+    }
+    if (mood_ == Mood::ASK) {
       const int h = ui::line_height(Font::TITLE);
       const std::string ask = ask_.c_str();
       mark(ask, std::min(w_ - ui::text_width(ask, Font::TITLE), cx + R + ui::px(2)),
-           cy - R / 2 - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
-    } else {
-      hide(mark_, true);
+           cy - RY / 2 - h / 2 - (blink() ? ui::px(3) : 0), Font::TITLE, Tone::NORMAL, theme::INK);
+      return true;
     }
+    return false;
   }
 
- MotionKind kind_ = MotionKind::NONE;
+  MotionKind kind_ = MotionKind::NONE;
   Mood mood_ = Mood::REST;
   uint32_t frame_ = 0;
-  bool ground_ = false;
-  int w_ = 0, h_ = 0, gap_ = 0, size_ = 0, x0_ = 0, y0_ = 0, pitch_ = 0, radius_ = 0;
+  bool ground_ = false, whole_ = false;
+  int w_ = 0, h_ = 0, size_ = 0, x0_ = 0, pitch_ = 0, radius_ = 0, reach_ = 0;
+  int count_ = 0;                            // the parts made
+  int lanes_ = 1, sparks_ = 1, step_ = 1;    // what this room uses: muncher lanes, sparks, the mosaic's scatter step
+  Grid grid_;
   tessera::Text sleep_, ask_;  // "z" and "?", from the translations
-  lv_obj_t *room_{}, *body_{}, *mouth_{}, *eye_{}, *mark_{};
-  lv_obj_t *part_[ARMS * DOTS]{};
+  lv_obj_t *room_{}, *mark_{};
+  lv_obj_t *part_[MAX_PARTS]{};
 };
 
 // ---- The activity tile: whether Claude is at work, since when, in how many sessions, and whether one asks ----
@@ -746,7 +871,10 @@ class ActivityTile : public tessera::Tile {
       lv_obj_set_style_text_align(row_state_[i], LV_TEXT_ALIGN_RIGHT, 0);
     }
     // The motion the person picked (the manifest fills in the default); its parts only.
-    motion_.create(body_, motion_kind(c.options["motion"] | "mosaic"), plugin_);
+    // A wide tile gives it the right half under the head, down to its foot: it makes the parts of the tallest such room.
+    const bool wide = columns_ >= 2;
+    motion_.create(body_, motion_kind(c.options["motion"] | "mosaic"), plugin_, wide, wide ? width_ / 2 - gap_ : 0,
+                   wide ? height_ - head_ - gap_ / 2 : 0);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -842,7 +970,7 @@ class ActivityTile : public tessera::Tile {
       lv_obj_set_pos(of_, 0, head_ + gap_);
       ink(of_, Tone::NORMAL, theme::MUTED);
       ui::set_text(of_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
-      motion_.place(0, 0, 0, 0);
+      motion_.place(0, 0, 0, 0, false);
       return;
     }
 
@@ -919,10 +1047,10 @@ class ActivityTile : public tessera::Tile {
       ink(of_, Tone::NORMAL, theme::MUTED);
       bottom = top + block_h + gap_;
       // The right half, all the way down: two rows high the names stay at the left beside it.
-      motion_.place(bw_ - anim_w, head_ + gap_ / 2, anim_w, bh_ - head_ - gap_ / 2);
+      motion_.place(bw_ - anim_w, head_ + gap_ / 2, anim_w, bh_ - head_ - gap_ / 2, true);
     } else {
       // Under the motion the number, and under it one word of state.
-      motion_.place(0, head_ + gap_ / 2, bw_, anim_h - gap_ / 2);
+      motion_.place(0, head_ + gap_ / 2, bw_, anim_h - gap_ / 2, false);
       const int top = head_ + anim_h + std::max(0, (top_room - anim_h - big_h - body_h) / 2);
       lv_obj_set_size(big_, bw_, big_h);
       lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
@@ -1361,18 +1489,26 @@ static std::string progress_word(const tessera::Plugin *plugin, const Background
 }
 
 // Steps are known only when the numbers make sense: at least one step, and no more done than there are.
+// Counts are capped first, so the bar's `(total - done) * 1000` stays far inside an int.
+static constexpr int MAX_STEPS = 10000, MAX_CALLS = 1000000;
 static void sane(BackgroundRow &row) {
+  row.total = std::min(row.total, MAX_STEPS);
+  row.done = std::min(row.done, MAX_STEPS);
+  row.calls = std::min(row.calls, MAX_CALLS);
   if (row.total < 1 || row.done < 0 || row.done > row.total) {
     row.done = -1;
     row.total = 0;
   }
+  // Tool calls are an agent's: a shell keeps none, and a count below zero is unknown.
+  if (row.calls < 0 || std::strcmp(row.kind, "shell") == 0) row.calls = -1;
 }
 
 // The rows of the background sensor: its parallel lists, with the steps from the mod (-1 and 0 where unknown).
 static void parse_background(tessera::List<BackgroundRow> &tasks, JsonObjectConst a) {
   tasks.clear();
   JsonArrayConst titles = a["bg_titles"], kinds = a["bg_kinds"], sess = a["bg_sess"], hm = a["bg_hm"];
-  JsonArrayConst at = a["bg_at"], done = a["bg_done"], total = a["bg_total"];
+  // A list shorter than the titles (or missing, from an older integration) leaves its rows unknown.
+  JsonArrayConst at = a["bg_at"], done = a["bg_done"], total = a["bg_total"], calls = a["bg_calls"];
   for (size_t i = 0; i < titles.size() && i < static_cast<size_t>(MAX_TASK_ROWS); ++i) {
     BackgroundRow row;
     copy(row.title, titles[i] | "");
@@ -1382,6 +1518,7 @@ static void parse_background(tessera::List<BackgroundRow> &tasks, JsonObjectCons
     row.at = i < at.size() ? (at[i] | 0u) : 0u;
     row.done = i < done.size() ? (done[i] | -1) : -1;
     row.total = i < total.size() ? (total[i] | 0) : 0;
+    row.calls = i < calls.size() ? (calls[i] | -1) : -1;
     sane(row);
     tasks.push_back(row);
   }
@@ -1401,6 +1538,7 @@ static void parse_background_result(tessera::List<BackgroundRow> &tasks, JsonObj
     row.at = t["at"] | 0u;
     row.done = t["done"] | -1;
     row.total = t["total"] | 0;
+    row.calls = t["calls"] | -1;
     sane(row);
     tasks.push_back(row);
   }
@@ -1952,6 +2090,8 @@ class BackgroundCard : public tessera::Card {
         if (!step.empty()) step += " · ";
         step += row.note;
       }
+      // Neither steps nor a note: an agent's tool calls so far, if the integration counts them (0.2.6).
+      if (step.empty() && row.calls >= 0) step = tessera::format(plugin_->text("background_calls"), row.calls);
       const bool quiet = step.empty();
       if (quiet) step = plugin_->text("background_no_progress");
       lv_obj_set_size(row_step_[i], inner, line2_);

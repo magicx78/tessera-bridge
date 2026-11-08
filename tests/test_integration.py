@@ -285,3 +285,30 @@ async def test_get_background_is_empty_without_tasks(hass):
     await setup_entry(hass)
     reply = await hass.services.async_call(DOMAIN, "get_background", {}, blocking=True, return_response=True)
     assert reply == {"tasks": []}
+
+
+# Home Assistant's JSON refuses Infinity (400); a huge finite age gets through.
+@pytest.mark.parametrize("age", ["1e11", "1e300"])
+async def test_a_task_age_past_any_clock_leaves_the_sensor_and_the_service_working(hass, hass_client, age):
+    await setup_entry(hass)
+    client = await hass_client()
+    task = '{"id": "bg1", "kind": "shell", "title": "Build", "age": ' + age + "}"
+    body = '{"instance": "pc1", "session": "a", "seq": 1, "name": "Garden", "state": "working", "questions": [], "tasks": [' + task + "]}"
+    response = await client.post("/api/tessera_claude/v1/report", data=body, headers={"Content-Type": "application/json"})
+    assert response.status == 200
+    await hass.async_block_till_done()
+    attributes = hass.states.get("sensor.claude_background").attributes
+    assert attributes["bg_titles"] == ["Build"] and attributes["bg_at"][0] > 0
+    reply = await hass.services.async_call(DOMAIN, "get_background", {}, blocking=True, return_response=True)
+    assert [t["title"] for t in reply["tasks"]] == ["Build"]
+
+
+async def test_the_lists_that_change_with_every_report_stay_out_of_the_recorder(hass, hass_client):
+    await setup_entry(hass)
+    client = await hass_client()
+    await post_report(client, tasks=[{"id": "a1", "kind": "agent", "title": "t", "age": 0, "calls": 3}])
+    await hass.async_block_till_done()
+    background = hass.states.get("sensor.claude_background")
+    bg = {k for k in background.attributes if k.startswith("bg_")}
+    assert bg and bg <= background.state_info["unrecorded_attributes"]
+    assert "rev" in hass.states.get("sensor.claude_sessions").state_info["unrecorded_attributes"]

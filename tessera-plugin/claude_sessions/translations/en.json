@@ -75,6 +75,7 @@
     "notify_none": "Nothing",
     "background_step": "Step {a} of {b}",
     "background_no_progress": "no progress reported",
+    "background_calls": "1 action | {n} actions",
     "background_done": "{a}/{b}"
   },
   "app": {

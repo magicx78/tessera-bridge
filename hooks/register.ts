@@ -28,6 +28,15 @@ export const register: Register = (on, options) => {
 
   const toolResult = (questions: unknown, answers: ToolAnswers) => ({ result: { questions, answers } })
 
+  // Bookkeeping that fails after `next` ran is caught in the hook, so the hook still answers what `next` gave; the
+  // failure is said once per hook, not with every call.
+  const failedOnce = new Set<string>()
+  const failed = (where: string, err: unknown) => {
+    if (failedOnce.has(where)) return
+    failedOnce.add(where)
+    host?.log(`tessera-bridge: ${where} failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   async function pushUsage(h: Host, session: SessionBridge) {
     try {
       const usage = await h.usage()
@@ -112,20 +121,18 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
   // The source that works in a real session: the model's response of a subagent's loop. A step tool is served inside
   // its owner's own tool.call hook, which answers without next, so neither the tool.call hook below nor PostToolUse ever
-  // hears it; the response lists the call whoever answers it. Every other call the agent asks for counts as activity,
-  // the honest fallback for an agent that reports no step (its type may lack the tool).
+  // hears it; the response lists the call whoever answers it. Only step reports are read here: a call the response asks
+  // for may still be refused, so the agent's calls are counted in the tool.call hook below, once they ran. A step the
+  // step tool refuses is not seen here (the response carries no result); one that makes no sense is left out already.
   on('turn.step', async function* ($, e, next) {
     const step = yield* next(e)
     try {
-      const session = host && e.agentId ? bridge.peek() : undefined
-      if (session && e.agentId) {
-        for (const use of step.toolUses) {
-          if (PROGRESS_TOOLS.has(use.name)) takeProgress(use.name, use.input, e.agentId)
-          else session.countCall(e.agentId)
-        }
+      if (host && e.agentId) {
+        for (const use of step.toolUses) if (PROGRESS_TOOLS.has(use.name)) takeProgress(use.name, use.input, e.agentId)
       }
-    } catch {
+    } catch (err) {
       // The display is not worth a model response: whatever went wrong here, the step stands.
+      failed('turn.step', err)
     }
     return step
   })
@@ -148,41 +155,53 @@ export const register: Register = (on, options) => {
       if (late.error !== undefined || late.result === undefined) throw late.error
       return late.result
     }
-    if (session.mode === 'bypassPermissions') {
-      // The app may answer by itself in a moment: such a question is nobody's, and the screens never hear of it.
-      const grace = new Promise<boolean>(resolve => h.after(BYPASS_QUESTION_GRACE_MS, () => resolve(false)))
-      if (await Promise.race([desktop.then(() => true), grace])) return settle()
-    }
-    const question = await session.ask(h, id, raw)
-    if (!question) return settle()
-
-    const display = session.waitFor(id).then(status => ({ from: 'display' as const, status }))
-    const first = await Promise.race([desktop, display])
-
-    if (first.from === 'display') {
-      const status = first.status
-      const answers = status.status === 'answered' && status.answer ? toToolAnswers(question, status.answer) : null
-      if (answers) {
-        h.toast('Antwort vom Tessera-Screen übernommen')
-        return toolResult(e.questions, answers)
-      }
-      // Cancelled, or an answer that does not fit: the dialog in the app stands.
+    try {
+      return await race()
+    } catch (err) {
+      // The dialog is open already: whatever broke on the display's side, its answer is the one, and no second dialog.
+      // The dialog's own error is no failure of ours: settle passes it on.
+      if ((await desktop).error !== err) failed('AskUserQuestion', err)
+      if (session.questions.has(id)) session.settleQuestion(id, { status: 'cancelled' })
       return settle()
     }
 
-    // The app settled first: the PC's answer stands unless the display was quicker at the integration.
-    const refused = first.error !== undefined || first.result?.deny !== undefined || first.result?.isError === true
-    const claim = await session.claim(h, id, refused ? 'cancelled' : 'answered')
-    session.settleQuestion(id, { status: refused ? 'cancelled' : 'answered', by: 'pc' })
-    if (claim && !claim.accepted && claim.by === 'display' && claim.answer) {
-      const answers = toToolAnswers(question, claim.answer)
-      if (answers) {
-        h.toast('Antwort vom Tessera-Screen übernommen')
-        return toolResult(e.questions, answers)
+    async function race() {
+      if (session.mode === 'bypassPermissions') {
+        // The app may answer by itself in a moment: such a question is nobody's, and the screens never hear of it.
+        const grace = new Promise<boolean>(resolve => h.after(BYPASS_QUESTION_GRACE_MS, () => resolve(false)))
+        if (await Promise.race([desktop.then(() => true), grace])) return settle()
       }
+      const question = await session.ask(h, id, raw)
+      if (!question) return settle()
+
+      const display = session.waitFor(id).then(status => ({ from: 'display' as const, status }))
+      const first = await Promise.race([desktop, display])
+
+      if (first.from === 'display') {
+        const status = first.status
+        const answers = status.status === 'answered' && status.answer ? toToolAnswers(question, status.answer) : null
+        if (answers) {
+          h.toast('Antwort vom Tessera-Screen übernommen')
+          return toolResult(e.questions, answers)
+        }
+        // Cancelled, or an answer that does not fit: the dialog in the app stands.
+        return settle()
+      }
+
+      // The app settled first: the PC's answer stands unless the display was quicker at the integration.
+      const refused = first.error !== undefined || first.result?.deny !== undefined || first.result?.isError === true
+      const claim = await session.claim(h, id, refused ? 'cancelled' : 'answered')
+      session.settleQuestion(id, { status: refused ? 'cancelled' : 'answered', by: 'pc' })
+      if (claim && !claim.accepted && claim.by === 'display' && claim.answer) {
+        const answers = toToolAnswers(question, claim.answer)
+        if (answers) {
+          h.toast('Antwort vom Tessera-Screen übernommen')
+          return toolResult(e.questions, answers)
+        }
+      }
+      if (first.error !== undefined || first.result === undefined) throw first.error
+      return first.result
     }
-    if (first.error !== undefined || first.result === undefined) throw first.error
-    return first.result
   }).catch(($, e, next) => next(e))
 
   on('tool.check', async ($, e, next) => {
@@ -192,21 +211,25 @@ export const register: Register = (on, options) => {
     // A newer engine names who answers the ask (`approver`); only a person's ask is a hint. `decider: "host"` is
     // not excluded: the Desktop app hosts the session and the person still answers there.
     const approver = (e as { approver?: string }).approver
-    if (
-      h &&
-      cfg.permissionHints &&
-      verdict.decision === 'ask' &&
-      (approver === undefined || approver === 'person') &&
-      id !== undefined &&
-      e.tool !== 'AskUserQuestion'
-    ) {
-      const session = await bridge.session(h)
-      // A hint only after the delay, and only for an ask a person sees: in `auto` the classifier answers most asks
-      // by itself, and the delay starts with the PermissionRequest that hands one to the person.
-      session.askPermission(id, e.tool, e.input)
-      h.after(cfg.hintDelayMs, () => {
-        if (session.hintIfStillOpen(id)) void session.report(h)
-      })
+    try {
+      if (
+        h &&
+        cfg.permissionHints &&
+        verdict.decision === 'ask' &&
+        (approver === undefined || approver === 'person') &&
+        id !== undefined &&
+        e.tool !== 'AskUserQuestion'
+      ) {
+        const session = await bridge.session(h)
+        // A hint only after the delay, and only for an ask a person sees: in `auto` the classifier answers most asks
+        // by itself, and the delay starts with the PermissionRequest that hands one to the person.
+        session.askPermission(id, e.tool, e.input)
+        h.after(cfg.hintDelayMs, () => {
+          if (session.hintIfStillOpen(id)) void session.report(h)
+        })
+      }
+    } catch (err) {
+      failed('tool.check', err)
     }
     return verdict
   }).catch(($, e, next) => next(e))
@@ -228,20 +251,27 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // Once a tool ran (or was refused) the person has answered on the PC: the hint of that call goes. A call that
-  // started a background task (or stopped one) changes the session's list of them.
+  // started a background task (or stopped one) changes the session's list of them; a task an agent's loop starts is
+  // that agent's and ends with it. A call of an agent's loop that ran counts as its work (a step report is none).
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     const h = host
-    if (h && e.tool_use_id !== undefined) bridge.peek()?.settleAsk(e.tool_use_id)
-    if (ran.result !== undefined && ran.isError !== true) takeProgress(e.tool, e, (e as { agentId?: string }).agentId)
-    if (h && ran.result !== undefined && ran.isError !== true) {
-      const started = backgroundStart(e.tool, e, ran.result)
-      const stopped = stoppedTask(e.tool, e, ran.result)
-      if (started || stopped) {
-        const session = await bridge.session(h)
-        if (started) session.startTask(started, await h.now())
-        if (stopped) session.endTask(stopped)
+    try {
+      const agentId = e.agentId
+      if (h && e.tool_use_id !== undefined) bridge.peek()?.settleAsk(e.tool_use_id)
+      if (ran.result !== undefined && ran.isError !== true) takeProgress(e.tool, e, agentId)
+      if (h && ran.result !== undefined && ran.isError !== true) {
+        if (agentId && !PROGRESS_TOOLS.has(e.tool)) bridge.peek()?.countCall(agentId)
+        const started = backgroundStart(e.tool, e, ran.result)
+        const stopped = stoppedTask(e.tool, e, ran.result)
+        if (started || stopped) {
+          const session = await bridge.session(h)
+          if (started) session.startTask(started, await h.now(), agentId)
+          if (stopped) session.endTask(stopped)
+        }
       }
+    } catch (err) {
+      failed('tool.call', err)
     }
     return ran
   }).catch(($, e, next) => next(e))

@@ -13,7 +13,7 @@ tiles:
     sizes: [1x1]
   - tile: activity
     entity: sensor.claude_sessions
-    sizes: [1x1, 2x1, 2x2]
+    sizes: [1x1, 2x1, 2x2, 2x3, 1x3]
   - tile: activity
     name: At rest
     entity: sensor.claude_sessions_empty
@@ -26,7 +26,7 @@ tiles:
     name: Muncher at work
     entity: sensor.claude_sessions_work
     options: { motion: chomper }
-    sizes: [1x1, 2x1, 2x2]
+    sizes: [1x1, 2x1, 2x2, 2x3]
   - tile: activity
     name: Muncher waits
     entity: sensor.claude_sessions_perm
@@ -46,7 +46,7 @@ tiles:
     name: Spark at work
     entity: sensor.claude_sessions_work
     options: { motion: spark }
-    sizes: [1x1, 2x1, 2x2]
+    sizes: [1x1, 2x1, 2x2, 2x3]
   - tile: activity
     name: Spark sleeps
     entity: sensor.claude_sessions_empty
@@ -87,16 +87,19 @@ tiles:
 
 states:
   sensor.claude_background:
-    state: "4"
+    state: "5"
     attributes:
-      bg_titles: ["Build the P4 firmware", "Review the registry change", "Watch the HA log", "Release checks"]
-      bg_kinds: [shell, agent, monitor, workflow]
-      bg_sess: [tessera-bridge, tessera-bridge, homelab-docs, garden-irrigation]
-      bg_at: ["{epoch-3m}", "{epoch-12m}", "{epoch-47m}", "{epoch-5h}"]
-      bg_hm: ["14:57", "14:48", "14:13", "10:00"]
+      bg_titles: ["Build the P4 firmware", "Review the registry change", "Find the stale entry", "Watch the HA log",
+                  "Release checks"]
+      bg_kinds: [shell, agent, agent, monitor, workflow]
+      bg_sess: [tessera-bridge, tessera-bridge, tessera-bridge, homelab-docs, garden-irrigation]
+      bg_at: ["{epoch-3m}", "{epoch-12m}", "{epoch-20m}", "{epoch-47m}", "{epoch-5h}"]
+      bg_hm: ["14:57", "14:48", "14:40", "14:13", "10:00"]
       # Steps only where the task reports them (the mod 0.2.4): -1 and 0 while unknown.
-      bg_done: [-1, 2, -1, 3]
-      bg_total: [0, 5, 0, 4]
+      bg_done: [-1, 2, -1, -1, 3]
+      bg_total: [0, 3, 0, 0, 4]
+      # An agent's tool calls so far (integration 0.2.6), -1 for the rest; steps win over them on the card.
+      bg_calls: [-1, 7, 5, -1, -1]
   sensor.claude_background_empty:
     state: "0"
     attributes:
@@ -107,6 +110,7 @@ states:
       bg_hm: []
       bg_done: []
       bg_total: []
+      bg_calls: []
   sensor.claude_sessions:
     state: "3"
     attributes:
@@ -242,10 +246,11 @@ commands:
     accepted: true
   "call_service:tessera_claude.get_background":
     tasks:
-      - { title: "Build the P4 firmware", kind: shell, session: tessera-bridge, at: "{epoch-3m}", hm: "14:57", done: -1, total: 0, note: "" }
-      - { title: "Review the registry change", kind: agent, session: tessera-bridge, at: "{epoch-12m}", hm: "14:48", done: 2, total: 5, note: "Writing the tests" }
-      - { title: "Watch the HA log", kind: monitor, session: homelab-docs, at: "{epoch-47m}", hm: "14:13", done: -1, total: 0, note: "" }
-      - { title: "Release checks", kind: workflow, session: garden-irrigation, at: "{epoch-5h}", hm: "10:00", done: 3, total: 4, note: "" }
+      - { title: "Build the P4 firmware", kind: shell, session: tessera-bridge, at: "{epoch-3m}", hm: "14:57", done: -1, total: 0, calls: -1, note: "" }
+      - { title: "Review the registry change", kind: agent, session: tessera-bridge, at: "{epoch-12m}", hm: "14:48", done: 2, total: 3, calls: 7, note: "Writing the tests" }
+      - { title: "Find the stale entry", kind: agent, session: tessera-bridge, at: "{epoch-20m}", hm: "14:40", done: -1, total: 0, calls: 5, note: "" }
+      - { title: "Watch the HA log", kind: monitor, session: homelab-docs, at: "{epoch-47m}", hm: "14:13", done: -1, total: 0, calls: -1, note: "" }
+      - { title: "Release checks", kind: workflow, session: garden-irrigation, at: "{epoch-5h}", hm: "10:00", done: 3, total: 4, calls: -1, note: "" }
   "call_service:tessera_claude.set_notify":
     notify: tone
 
