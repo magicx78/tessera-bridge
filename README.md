@@ -4,7 +4,7 @@
 
 **Alle laufenden Claude-Code-Sessions auf den Tessera-Touchscreens in Home Assistant – und Claudes Fragen direkt am Screen beantworten.**
 
-![Mod](https://img.shields.io/badge/Mod-0.2.9-7c3aed)
+![Mod](https://img.shields.io/badge/Mod-0.2.10-7c3aed)
 ![Integration](https://img.shields.io/badge/Integration-0.2.8-41bdf5)
 ![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.11-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
@@ -115,7 +115,7 @@ Danach die Optionen setzen, unter `/plugin` → Installed → tessera-bridge:
 | `permissionHints` | `on`: wartende Freigaben werden am Screen als Hinweis gezeigt | `on` |
 | `hintDelay` | So viele Sekunden muss eine Freigabe-Anfrage am PC offen sein, bevor der Hinweis kommt. | `8` |
 
-In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden. Den Fortschritt eines Agents melden nur Sessions ab Mod 0.2.4; er kommt aus den Schritt-Werkzeugen `mcp__clawd-hq__step` und `mcp__savvy-progress__step`, die der Agent in seiner Schleife aufruft. Ab Mod 0.2.5 liest der Mod sie aus der Antwort des Modells, denn mit Mod 0.2.4 kamen sie in einer echten Session nie an. Er zählt außerdem die übrigen Werkzeug-Aufrufe eines Agents (`bg_calls` ab Integration 0.2.6), auch wenn der Agent keine Schritte meldet. Ab Mod 0.2.9 bewegt ein Schritt den Balken erst, wenn das Schritt-Werkzeug ihn angenommen hat; einen abgelehnten Schritt (etwa eine Notiz über 80 Zeichen) zeigt der Balken nicht mehr.
+In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden. Den Fortschritt eines Agents melden nur Sessions ab Mod 0.2.4; er kommt aus den Schritt-Werkzeugen `mcp__clawd-hq__step` und `mcp__savvy-progress__step`, die der Agent in seiner Schleife aufruft. Ab Mod 0.2.5 liest der Mod sie aus der Antwort des Modells, denn mit Mod 0.2.4 kamen sie in einer echten Session nie an. Er zählt außerdem die übrigen Werkzeug-Aufrufe eines Agents (`bg_calls` ab Integration 0.2.6), auch wenn der Agent keine Schritte meldet. Ab Mod 0.2.9 bewegt ein Schritt den Balken erst, wenn das Schritt-Werkzeug ihn angenommen hat; einen abgelehnten Schritt (etwa eine Notiz über 80 Zeichen) zeigt der Balken nicht mehr. Ab Mod 0.2.10 ändert sich für die Anzeige nichts: nur die Typsicherheit des Codes und ein stabiler Test.
 
 Willst du nur für eine Session einen Checkout laden, geht das mit `claude --plugin-dir /pfad/zu/tessera-bridge`.
 

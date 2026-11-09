@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, SessionAppendInput } from 'claude-code'
+import type { AgentInfo, AgentStatus, SessionAppendInput, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
@@ -7,7 +7,7 @@ import { baseName, describeCall } from '../hooks/describe'
 import { readConfig } from '../hooks/ha'
 import type { Host } from '../hooks/host'
 import { toReported, toToolAnswers } from '../hooks/questions'
-import { SessionBridge } from '../hooks/session'
+import { POLL_MS, SessionBridge } from '../hooks/session'
 
 const OPTIONS = {
   haUrl: 'http://ha.test:8123',
@@ -71,7 +71,7 @@ function mockHa(on: Parameters<TestBody>[1]) {
   })
   on('session.cwd', () => ({ value: ha.cwd }))
   on('session.model', () => ({ value: 'claude' }))
-  on('session.usage', () => ({ value: { context: { window: 1_000_000, tokens: 50_000, percent: 5 }, rateLimits: [] } }))
+  on('session.usage', () => ({ value: { context: { window: 1_000_000, tokens: 50_000, percent: 5 }, rateLimits: [], startedAt: 0 } }))
   mock.store(on, {})
   return ha
 }
@@ -129,8 +129,10 @@ test('a question answered on the display is answered in the app, by option id', 
   expect(questions[0]?.id).toBe('toolu_q1')
   expect(questions[0]?.parts[0]?.options.map(o => o.id)).toEqual(['o0', 'o1'])
 
-  // Minutes pass while nobody answers: the poll keeps running, nothing breaks. Then the display answers.
-  await clock.advance(120_000)
+  // Time passes while nobody answers: the poll keeps running, nothing breaks. Then the display answers. Every poll
+  // tick costs real event-loop time in the kit, so the wait is ten ticks (not the 80 that two minutes would be):
+  // that is what kept this test near its 5 s limit, and past it under load.
+  await clock.advance(10 * POLL_MS)
   ha.questions['toolu_q1'] = { status: 'answered', by: 'display', answer: { p0: ['o1'] }, nonce: questions[0]!.nonce }
   await clock.advance(2_000)
 
@@ -481,6 +483,7 @@ test("a background agent's progress comes from the step tool of its loop", { opt
   await $.prompt.submit({
     text: '<task-notification><task-id>a1</task-id><status>completed</status></task-notification>',
     origin: { kind: 'task-notification' },
+    wait: false,
   })
   await clock.advance(2_000)
   expect(ha.lastReport()?.tasks).toEqual([])
@@ -585,7 +588,7 @@ test('a shell has no tool calls to count', { options: OPTIONS }, async ($, on) =
 
 test("a background agent's task ends with its loop's turn, and leaves the main loop's question be", { options: OPTIONS }, async ($, on) => {
   on('turn.complete', () => ({ text: '' }))
-  let answer: ((value: unknown) => void) | null = null
+  let answer: ((value: ToolCallResult) => void) | null = null
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
   const { clock, ha, agents } = await withAgent($, on)
   const call = $.tool.call({ tool: 'AskUserQuestion', questions: TWO, tool_use_id: 'toolu_q10' })
@@ -617,7 +620,7 @@ test("a subagent's turn.start does not make the main session work", { options: O
 test("a subagent's turn.complete leaves the working main session and its question be", { options: OPTIONS }, async ($, on) => {
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
-  let answer: ((value: unknown) => void) | null = null
+  let answer: ((value: ToolCallResult) => void) | null = null
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
   const { clock, ha, agents } = await withAgent($, on)
   await $.turn.start({ text: 'go', turnId: 'turn-main' })
@@ -798,11 +801,11 @@ test("an agent's interim notification keeps it and its shells; its final one end
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['a1', 'b7'])
 
-  await $.prompt.submit({ text: interimNotification('a1'), origin: { kind: 'task-notification' } })
+  await $.prompt.submit({ text: interimNotification('a1'), origin: { kind: 'task-notification' }, wait: false })
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['a1', 'b7'])
 
-  await $.prompt.submit({ text: finalNotification('a1'), origin: { kind: 'task-notification' } })
+  await $.prompt.submit({ text: finalNotification('a1'), origin: { kind: 'task-notification' }, wait: false })
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual([])
 })
@@ -933,7 +936,7 @@ test('in bypassPermissions a question the app answers by itself is never reporte
   const clock = mock.clock(on)
   const ha = mockHa(on)
   classic(on)
-  let answer: ((value: unknown) => void) | null = null
+  let answer: ((value: ToolCallResult) => void) | null = null
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise(resolve => { answer = resolve }))
 
   await start($)
@@ -1052,6 +1055,7 @@ test("an agent's background shells and monitors never push it out, and end with 
   await $.prompt.submit({
     text: '<task-notification><task-id>a1</task-id><status>completed</status></task-notification>',
     origin: { kind: 'task-notification' },
+    wait: false,
   })
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['s10'])

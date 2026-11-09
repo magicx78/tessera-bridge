@@ -161,7 +161,7 @@ export const register: Register = (on, options) => {
       return late.result
     }
     try {
-      return await race()
+      return await race(h)
     } catch (err) {
       // The dialog is open already: whatever broke on the display's side, its answer is the one, and no second dialog.
       // The dialog's own error is no failure of ours: settle passes it on.
@@ -170,7 +170,7 @@ export const register: Register = (on, options) => {
       return settle()
     }
 
-    async function race() {
+    async function race(h: Host) {
       if (session.mode === 'bypassPermissions') {
         // The app may answer by itself in a moment: such a question is nobody's, and the screens never hear of it.
         const grace = new Promise<boolean>(resolve => h.after(BYPASS_QUESTION_GRACE_MS, () => resolve(false)))
