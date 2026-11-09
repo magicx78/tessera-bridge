@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { backgroundStart, endedTasks, PROGRESS_TOOLS, progressReport, runningTasks, stoppedTask } from './background'
+import { backgroundStart, endedTasks, notificationText, PROGRESS_TOOLS, progressReport, runningTasks, stoppedTask } from './background'
 import { readConfig } from './ha'
 import type { Host } from './host'
 import { nonce, toToolAnswers, type ToolAnswers } from './questions'
@@ -281,6 +281,18 @@ export const register: Register = (on, options) => {
     if (host && e.origin.kind === 'task-notification') {
       const session = bridge.peek()
       for (const id of endedTasks(e.text)) session?.endTask(id)
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A notification that comes while its loop (main or a subagent's) is mid-turn is no prompt: it is kept as a row, an
+  // attachment (`queued_command`), and the queue's record of it. Every row of every loop passes here; only the rows
+  // `notificationText` takes are read, and none is changed.
+  on('session.append', async ($, e, next) => {
+    const text = host ? notificationText(e) : null
+    if (text) {
+      const session = bridge.peek()
+      for (const id of endedTasks(text)) session?.endTask(id)
     }
     return next(e)
   }).catch(($, e, next) => next(e))

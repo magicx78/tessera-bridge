@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus } from 'claude-code'
+import type { AgentInfo, AgentStatus, SessionAppendInput } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
@@ -643,6 +643,138 @@ test("the main turn's Stop sweeps the background tasks it named before and names
   await $.classic.Stop({ stop_hook_active: false })
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['bg2'])
+})
+
+/** An agent's notification when it ended its turn with its own background work still running: interim, not its end. */
+const interimNotification = (id: string) =>
+  [
+    '<task-notification>',
+    `<task-id>${id}</task-id>`,
+    '<tool-use-id>toolu_x</tool-use-id>',
+    `<output-file>C:\\tmp\\${id}.output</output-file>`,
+    '<status>completed</status>',
+    '<summary>Agent "Probe A" is waiting on its own background work</summary>',
+    '<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>',
+    '<result>Started the probe; waiting for it.</result>',
+    '</task-notification>',
+  ].join('\n')
+
+/** A task's final notification. */
+const finalNotification = (id: string) =>
+  [
+    '<task-notification>',
+    `<task-id>${id}</task-id>`,
+    '<tool-use-id>toolu_y</tool-use-id>',
+    `<output-file>C:\\tmp\\${id}.output</output-file>`,
+    '<status>completed</status>',
+    `<summary>Task ${id} completed</summary>`,
+    '<result>done</result>',
+    '</task-notification>',
+  ].join('\n')
+
+test('a notification saying the agent waits on its own background work ends nothing; a final one beside it does', () => {
+  expect(endedTasks(`${interimNotification('a1')}\n${finalNotification('a2')}`)).toEqual(['a2'])
+  // Either signal alone, in any case, makes it interim.
+  const one = (id: string, inner: string) => `<task-notification><task-id>${id}</task-id><status>completed</status>${inner}</task-notification>`
+  expect(endedTasks(one('a3', '<summary>Agent "X" IS WAITING ON ITS OWN BACKGROUND WORK</summary>'))).toEqual([])
+  expect(endedTasks(one('a4', '<note>This agent Stopped with background work of its own still running.</note>'))).toEqual([])
+  expect(endedTasks(one('a5', '<note>It May Resume on its own.</note>'))).toEqual([])
+  // The words in the result are the agent's own, no note: the notification is final.
+  expect(endedTasks(one('a6', '<result>the server may resume later</result>'))).toEqual(['a6'])
+  // The real final note of an agent says it may be resumed too; that is not 'resume on its own'.
+  const finalNote =
+    '<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>'
+  expect(endedTasks(one('a7', `<summary>Agent "X" completed</summary>${finalNote}`))).toEqual(['a7'])
+})
+
+test("an agent's interim notification keeps it and its shells; its final one ends both", { options: OPTIONS }, async ($, on) => {
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b7' } }))
+  const { clock, ha } = await withAgent($, on)
+  await $.tool.call({ tool: 'Bash', command: 'sleep 60', description: 'Probe', run_in_background: true, agentId: 'a1', tool_use_id: 't50' })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  await $.prompt.submit({ text: interimNotification('a1'), origin: { kind: 'task-notification' } })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  await $.prompt.submit({ text: finalNotification('a1'), origin: { kind: 'task-notification' } })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
+})
+
+/**
+ * A row as `session.append` raises it: by default a notification delivered into a running turn, an attachment row of
+ * type `queued_command` the engine wrote (`origin.kind` engine), on the main loop.
+ */
+function appendRow(text: string, row: Partial<Omit<SessionAppendInput, 'message'>> & { type?: SessionAppendInput['message']['type'] } = {}): SessionAppendInput {
+  const { type = 'attachment', ...rest } = row
+  const message: SessionAppendInput['message'] =
+    type === 'attachment'
+      ? { type, name: 'queued_command', isMeta: true, content: [{ type: 'text', text }] }
+      : { type, role: type === 'assistant' ? 'assistant' : 'user', content: [{ type: 'text', text }] }
+  return { message, door: 'attachment', origin: { kind: 'engine' }, uuid: `row-${text.length}-${type}`, ...rest }
+}
+
+test("a shell's notification delivered into a running main turn ends its task", { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  let n = 0
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `bg${++n}` } }))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm test', run_in_background: true, tool_use_id: 't60' })
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true, tool_use_id: 't61' })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg1', 'bg2'])
+
+  await $.session.append(appendRow(finalNotification('bg1')))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg2'])
+
+  // The message queue's record of a notification counts too; a monitor's event (no status) ends nothing.
+  const event = '<task-notification><task-id>bg2</task-id><event>line 4</event></task-notification>'
+  await $.session.append(appendRow(event, { type: 'user', door: 'queue', origin: { kind: 'task-notification' } }))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg2'])
+  await $.session.append(appendRow(finalNotification('bg2'), { type: 'user', door: 'queue', origin: { kind: 'task-notification' } }))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
+})
+
+test("a subagent's shell whose notification comes into the agent's running turn ends; the agent stays", { options: OPTIONS }, async ($, on) => {
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b7' } }))
+  const { clock, ha } = await withAgent($, on)
+  await $.tool.call({ tool: 'Bash', command: 'sleep 60', description: 'Probe', run_in_background: true, agentId: 'a1', tool_use_id: 't62' })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  await $.session.append(appendRow(finalNotification('b7'), { agentId: 'a1' }))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1'])
+})
+
+test('notification text in a tool result, a tool message, a model response or a typed prompt ends nothing', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  classic(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg1' } }))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm test', run_in_background: true, tool_use_id: 't63' })
+
+  // Say the model read a transcript file: its result, and what the model says of it, hold the very text.
+  const text = finalNotification('bg1')
+  await $.session.append(appendRow(text, { type: 'user', door: 'tool-result', origin: { kind: 'tool', tool: 'Read' } }))
+  await $.session.append(appendRow(text, { type: 'user', door: 'tool-message', origin: { kind: 'tool', tool: 'Read' } }))
+  await $.session.append(appendRow(text, { type: 'assistant', door: 'response', origin: { kind: 'model', model: 'claude' } }))
+  await $.session.append(appendRow(text, { type: 'user', door: 'prompt', origin: { kind: 'composer' } }))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['bg1'])
+
+  // The same text as the engine's notification ends it.
+  await $.session.append(appendRow(text, { type: 'user', door: 'prompt', origin: { kind: 'task-notification' } }))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
 })
 
 /** The classic hooks' bottoms, and the session's permission mode as the next prompt names it. */

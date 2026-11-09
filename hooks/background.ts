@@ -8,6 +8,7 @@ export const MAX_TASKS = 8
 /**
  * A task not heard of for this long is taken as gone (its end was missed, say by a reload of the mod). The last net:
  * an agent's turn, the engine's agent list and a Stop's list of work in flight end most tasks long before.
+ * So does a notification kept as a row mid-turn (`session.append`: the queue's record or a `queued_command` attachment).
  */
 export const TASK_MAX_AGE_MS = 24 * 3600_000
 
@@ -65,7 +66,9 @@ export function stoppedTask(tool: string, input: unknown, result: unknown): stri
 
 /**
  * The tasks a task notification says are over: every `<task-id>` with a final `<status>`. A monitor's event carries
- * no final status, so its task stays. One prompt may carry several notifications.
+ * no final status, so its task stays. One prompt may carry several notifications. An agent that ended its turn with
+ * its own background work still running is notified `completed` too, but only for now (it may resume on its own, and
+ * the same id notifies again): its summary or note says so, and its task stays.
  */
 const FINAL = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled', 'canceled', 'error', 'timeout'])
 
@@ -74,9 +77,45 @@ export function endedTasks(text: string): string[] {
   for (const block of text.split(/<\/task-notification>/)) {
     const id = /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(block)?.[1]
     const status = /<status>\s*([^<\s]+)\s*<\/status>/.exec(block)?.[1]
-    if (id && status && FINAL.has(status.toLowerCase())) ended.push(id)
+    if (id && status && FINAL.has(status.toLowerCase()) && !isInterim(block)) ended.push(id)
   }
   return ended
+}
+
+/** Whether a notification's summary or note says its agent waits on its own background work (only those two: the result is the agent's own words). */
+function isInterim(block: string): boolean {
+  const summary = /<summary>([\s\S]*?)<\/summary>/i.exec(block)?.[1] ?? ''
+  const note = /<note>([\s\S]*?)<\/note>/i.exec(block)?.[1] ?? ''
+  return (
+    /is waiting on its own background work/i.test(summary) ||
+    /stopped with background work of its own still running|may resume on its own/i.test(note)
+  )
+}
+
+/**
+ * The rows of `session.append` that may carry the engine's task notifications: the message queue's record, a delivery
+ * or attachment into a running turn (`queued_command`), and a notification raised as a prompt. Never a row the model or
+ * a tool wrote (`response`, `tool-result`, `tool-message`): those hold such text whenever the model reads a transcript.
+ */
+const NOTIFICATION_DOORS = new Set(['queue', 'delivery', 'attachment'])
+/** Origins of what a person typed: their text is theirs, even when it holds a pasted notification. */
+const TYPED_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
+
+type AppendedRow = { door: string; origin: { kind: string }; message: { content: ReadonlyArray<{ type: string; [field: string]: unknown }> } }
+
+/**
+ * The text of a `session.append` row that may carry task notifications, or null for any other row. Taken: a row whose
+ * origin is a task notification (any door but the model's and the tools'), and a row of the doors `queue`, `delivery`
+ * or `attachment` not typed by a person. A `prompt` row counts only with the task-notification origin, as in prompt.submit.
+ */
+export function notificationText(e: AppendedRow): string | null {
+  if (e.door === 'response' || e.door === 'tool-result' || e.door === 'tool-message') return null
+  const kind = e.origin?.kind
+  if (kind !== 'task-notification' && !(NOTIFICATION_DOORS.has(e.door) && !TYPED_ORIGINS.has(kind))) return null
+  const text = (e.message?.content ?? [])
+    .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .join('\n')
+  return text.includes('<task-notification>') ? text : null
 }
 
 /**
