@@ -1,3 +1,5 @@
+import { baseName } from './describe'
+
 /** What runs in the background of a session: a shell, an agent, a monitor or a workflow. */
 export type BackgroundKind = 'shell' | 'agent' | 'monitor' | 'workflow'
 
@@ -23,6 +25,33 @@ function oneLine(text: string, limit = TITLE_MAX): string {
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
 }
 
+const LEADING_CD = /^\s*(?:cd|pushd)\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)(?:\s*(?:&&|;)\s*|\s*$)/
+const TOKEN = /"([^"]*)"|'([^']*)'|\S+/g
+const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]|~)/
+
+/** A path token long enough to cut: three or more segments when absolute, four or more when relative; never a URL. */
+function isLongPath(text: string): boolean {
+  if (text.includes('://') || !/[\\/]/.test(text)) return false
+  const segments = text.split(/[\\/]+/).filter(Boolean).length
+  return segments >= (ABSOLUTE.test(text) ? 3 : 4)
+}
+
+/**
+ * A shell command as a title for the screen: leading `cd <path> &&` / `;` (and `pushd`) dropped, every long path
+ * cut to its last segment, and the tool's name when nothing is left.
+ */
+export function shortenCommand(command: string, tool: string): string {
+  let rest = command
+  for (let next = rest.replace(LEADING_CD, ''); next !== rest; next = rest.replace(LEADING_CD, '')) rest = next
+  const cut = rest.replace(TOKEN, (token, dq?: string, sq?: string) => {
+    const inner = dq ?? sq ?? token
+    if (!isLongPath(inner)) return token
+    const name = baseName(inner)
+    return /\s/.test(name) ? `"${name}"` : name
+  })
+  return cut.trim() || tool
+}
+
 /**
  * The background task a finished tool call started, from its input and result; null when it started none. A shell
  * run with `run_in_background` (or moved there by hand) names its task in `backgroundTaskId`, a background agent
@@ -35,7 +64,7 @@ export function backgroundStart(tool: string, input: unknown, result: unknown): 
   if (tool === 'Bash' || tool === 'PowerShell') {
     const id = str(r.backgroundTaskId)
     if (!id) return null
-    return { id, kind: 'shell', title: oneLine(str(i.description) ?? str(i.command) ?? tool) }
+    return { id, kind: 'shell', title: oneLine(str(i.description) ?? shortenCommand(str(i.command) ?? '', tool)) }
   }
   if (tool === 'Agent' || tool === 'Task') {
     const id = str(r.agentId)
@@ -45,7 +74,7 @@ export function backgroundStart(tool: string, input: unknown, result: unknown): 
   if (tool === 'Monitor') {
     const id = str(r.taskId)
     if (!id) return null
-    return { id, kind: 'monitor', title: oneLine(str(i.description) ?? str(i.command) ?? 'Monitor') }
+    return { id, kind: 'monitor', title: oneLine(str(i.description) ?? shortenCommand(str(i.command) ?? '', 'Monitor')) }
   }
   if (tool === 'Workflow') {
     const id = str(r.taskId)

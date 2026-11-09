@@ -2,7 +2,7 @@ import type { AgentInfo, AgentStatus, SessionAppendInput } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { backgroundStart, endedTasks, progressReport, stoppedTask } from '../hooks/background'
+import { backgroundStart, endedTasks, progressReport, shortenCommand, stoppedTask } from '../hooks/background'
 import { baseName, describeCall } from '../hooks/describe'
 import { readConfig } from '../hooks/ha'
 import type { Host } from '../hooks/host'
@@ -355,6 +355,35 @@ test('a background shell is reported with its age until TaskStop ends it', { opt
   await $.tool.call({ tool: 'TaskStop', task_id: 'bg1', tool_use_id: 't10' })
   await clock.advance(2_000)
   expect(ha.lastReport()?.tasks).toEqual([])
+})
+
+test('a shell command without a description is shortened for the screen', () => {
+  const short = (c: string) => shortenCommand(c, 'Bash')
+  expect(short('cd /c/Users/magic/AppData/Local/Temp/x && python /c/Users/magic/AppData/Local/Temp/x/run.py --fast')).toBe('python run.py --fast')
+  expect(short('C:\\Users\\magic\\foo\\bar.ps1 -Force')).toBe('bar.ps1 -Force')
+  expect(short('python "C:\\Users\\magic\\My Docs\\build\\run.py" -v')).toBe('python run.py -v')
+  expect(short("node '/c/Users/magic/My Docs/app/server.js'")).toBe('node server.js')
+  expect(short('cd "/c/Users/magic/My Docs/proj"; cd sub && npm run watch')).toBe('npm run watch')
+  expect(short('cd x; ls -la src/a.py /dev/null')).toBe('ls -la src/a.py /dev/null')
+  expect(short('curl https://example.com/a/b/c/d.json')).toBe('curl https://example.com/a/b/c/d.json')
+  expect(short('cd /c/Users/magic/AppData/Local/Temp/x')).toBe('Bash')
+  expect(shortenCommand('   ', 'Monitor')).toBe('Monitor')
+})
+
+test('a background shell without a description shows a short title', { options: OPTIONS }, async ($, on) => {
+  const clock = mock.clock(on)
+  const ha = mockHa(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bg1' } }))
+  await start($)
+  await $.tool.call({
+    tool: 'Bash',
+    command: 'cd /c/Users/magic/AppData/Local/Temp/job && python /c/Users/magic/AppData/Local/Temp/job/run.py',
+    run_in_background: true,
+    tool_use_id: 't60',
+  })
+  await clock.advance(2_000)
+  const tasks = ha.lastReport()?.tasks as Array<{ title: string }>
+  expect(tasks.map(t => t.title)).toEqual(['python run.py'])
 })
 
 test('progress is read from the step tools and nowhere else', () => {
