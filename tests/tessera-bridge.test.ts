@@ -400,7 +400,7 @@ test('progress is read from the step tools and nowhere else', () => {
   expect(progressReport('mcp__clawd-hq__step', { done: -1, total: 5 })).toBe(null)
   expect(progressReport('mcp__clawd-hq__step', { done: '2', total: 5 })).toBe(null)
   expect(progressReport('mcp__other__step', { done: 1, total: 5 })).toBe(null)
-  const cut = progressReport('mcp__clawd-hq__step', { done: 1, total: 2, note: 'x'.repeat(200) })
+  const cut = progressReport('mcp__savvy-progress__step', { done: 1, total: 2, note: 'x'.repeat(200) })
   expect(cut?.note?.length).toBe(80)
 })
 
@@ -418,22 +418,50 @@ async function withAgent($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]
   const agents = { list: [agentInfo('a1', 'running')] }
   on('agent.list', () => ({ value: agents.list }))
   // What the next model response asks for. A step tool's owner answers the call in its own `tool.call` hook, above
-  // ours, so no tool hook of ours and no PostToolUse hears it: the model's response is where every plugin reads it.
+  // ours, so no tool hook of ours and no PostToolUse hears it: the rows the loop keeps are where every plugin reads it.
   let toolUses: Array<{ name: string; input: unknown }> = []
   on('turn.step', async function* () {
     return { turnId: 'turn-x', index: 0, answer: '', toolUses, stopReason: 'tool_use', usage: null } as never
   })
-  /** One model request of a loop (`agentId`; none for the main loop) whose response asks for `uses`. */
-  const modelStep = async (agentId: string | undefined, uses: typeof toolUses) => {
+  let callIds = 0
+  /** The step tool's answer to call `id` of a loop, as the loop keeps it: a tool-result row, refused (`is_error`) or not. */
+  const answerStep = async (agentId: string | undefined, id: string, refused = false) => {
+    const result = { type: 'tool_result', tool_use_id: id, content: refused ? 'note is too long' : 'Noted.', ...(refused ? { is_error: true } : {}) }
+    await $.session.append({
+      message: { type: 'user', role: 'user', content: [result] },
+      door: 'tool-result',
+      origin: { kind: 'tool', tool: 'mcp__clawd-hq__step' },
+      uuid: `row-${id}-result`,
+      ...(agentId ? { agentId } : {}),
+    })
+  }
+  /**
+   * One model request of a loop (`agentId`; none for the main loop) whose response asks for `uses`, and the rows the
+   * engine keeps of it: one per call, then the step tool's answer to each step call (`answer`: taken, refused, or not
+   * yet given). Resolves to the ids of the calls.
+   */
+  const modelStep = async (agentId: string | undefined, uses: typeof toolUses, answer: 'taken' | 'refused' | 'none' = 'taken') => {
     toolUses = uses
     const stream = ($.turn.step as (e: unknown) => AsyncIterable<unknown>)({ turnId: 'turn-x', index: 0, model: 'claude', messageCount: 1, agentId })
     for await (const _ of stream) void _
+    const ids = uses.map(() => `toolu-${++callIds}`)
+    for (const [n, use] of uses.entries()) {
+      await $.session.append({
+        message: { type: 'assistant', role: 'assistant', content: [{ type: 'tool_use', id: ids[n], name: use.name, input: use.input }] },
+        door: 'response',
+        origin: { kind: 'model', model: 'claude' },
+        uuid: `row-${ids[n]}`,
+        ...(agentId ? { agentId } : {}),
+      })
+    }
+    if (answer !== 'none') for (const [n, use] of uses.entries()) if (use.name.endsWith('__step')) await answerStep(agentId, ids[n]!, answer === 'refused')
+    return ids
   }
   await start($)
   await $.tool.call({ tool: 'Agent', description: 'Review', run_in_background: true, tool_use_id: 't11' })
   await clock.advance(2_000)
   const task = () => (ha.lastReport()?.tasks as Array<Record<string, unknown>>)[0]!
-  return { clock, ha, task, agents, modelStep }
+  return { clock, ha, task, agents, modelStep, answerStep }
 }
 
 test("a background agent's progress comes from the step tool of its loop", { options: OPTIONS }, async ($, on) => {
@@ -494,6 +522,53 @@ test("a background agent's progress comes from its loop's model response, whoeve
   await modelStep(undefined, [{ name: 'Bash', input: {} }, { name: 'mcp__clawd-hq__step', input: { done: 4, total: 5 } }])
   await clock.advance(2_000)
   expect([task().done, task().calls]).toEqual([3, 0])
+})
+
+test('a step report its tool refuses never moves the bar', { options: OPTIONS }, async ($, on) => {
+  const { clock, task, modelStep } = await withAgent($, on)
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 2, total: 5, note: 'Writing tests' } }])
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
+
+  // A report that looks fine to us, refused all the same (say no hook of the tool's owner answered it).
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 3, total: 5, note: 'Running the suite' } }], 'refused')
+  // A note past the tool's 80 characters: the tool refuses it whole, it never cuts it.
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 4, total: 5, note: 'x'.repeat(100) } }], 'refused')
+  await clock.advance(2_000)
+  expect([task().done, task().total, task().note]).toEqual([2, 5, 'Writing tests'])
+})
+
+test('a step report moves the bar once its tool took it, not when the model asks for it', { options: OPTIONS }, async ($, on) => {
+  const { clock, task, modelStep, answerStep } = await withAgent($, on)
+  const [id] = await modelStep('a1', [{ name: 'mcp__savvy-progress__step', input: { done: 1, total: 4 } }], 'none')
+  await clock.advance(2_000)
+  expect(task().total).toBe(undefined)
+
+  // Another loop's answer under the same id is not this call's; the answer of the agent's own loop is.
+  await answerStep('zz', id!)
+  await clock.advance(2_000)
+  expect(task().total).toBe(undefined)
+  await answerStep('a1', id!)
+  await clock.advance(2_000)
+  expect([task().done, task().total]).toEqual([1, 4])
+})
+
+test("a step report Clawd HQ's step tool refuses is no progress; savvy-progress takes more", () => {
+  const clawd = (input: Record<string, unknown>) => progressReport('mcp__clawd-hq__step', input)
+  const savvy = (input: Record<string, unknown>) => progressReport('mcp__savvy-progress__step', input)
+  expect(clawd({ done: 1, total: 12 })).toEqual({ done: 1, total: 12 })
+  expect(clawd({ done: 1, total: 13 })).toBe(null)
+  expect(savvy({ done: 1, total: 13 })).toEqual({ done: 1, total: 13 })
+  // The note is counted as the tool counts it: on its clean text, in whole characters.
+  expect(clawd({ done: 1, total: 2, note: 'x'.repeat(80) })?.note).toBe('x'.repeat(80))
+  expect(clawd({ done: 1, total: 2, note: 'x'.repeat(81) })).toBe(null)
+  expect(clawd({ done: 1, total: 2, note: ` ${'x'.repeat(80)}​\n` })?.note).toBe('x'.repeat(80))
+  expect(clawd({ done: 1, total: 2, note: '\u{1F600}'.repeat(80) })).not.toBe(null)
+  // A note that is no text is refused by both (the step tool, or the schema savvy-progress registers).
+  expect(clawd({ done: 1, total: 2, note: 5 })).toBe(null)
+  expect(savvy({ done: 1, total: 2, note: null })).toBe(null)
+  // savvy-progress takes a long note; the screen gets it cut.
+  expect(savvy({ done: 1, total: 2, note: 'x'.repeat(200) })?.note?.length).toBe(80)
 })
 
 test('a shell has no tool calls to count', { options: OPTIONS }, async ($, on) => {
@@ -911,10 +986,11 @@ test('the session takes the name of the folder it moved into', { options: OPTION
 })
 
 test('a step report is bounded as the integration bounds it', () => {
-  expect(progressReport('mcp__clawd-hq__step', { done: 20_000, total: 30_000 })).toEqual({ done: 10_000, total: 10_000 })
-  expect(progressReport('mcp__clawd-hq__step', { done: 5, total: 1e30 })).toEqual({ done: 5, total: 10_000 })
-  expect(progressReport('mcp__clawd-hq__step', { done: 1e30, total: 5 })).toBe(null)
-  expect(progressReport('mcp__clawd-hq__step', { done: 1, total: Infinity })).toBe(null)
+  // Clawd HQ's step tool takes at most 12 steps; savvy-progress names no bound.
+  expect(progressReport('mcp__savvy-progress__step', { done: 20_000, total: 30_000 })).toEqual({ done: 10_000, total: 10_000 })
+  expect(progressReport('mcp__savvy-progress__step', { done: 5, total: 1e30 })).toEqual({ done: 5, total: 10_000 })
+  expect(progressReport('mcp__savvy-progress__step', { done: 1e30, total: 5 })).toBe(null)
+  expect(progressReport('mcp__savvy-progress__step', { done: 1, total: Infinity })).toBe(null)
 })
 
 /** A host for a SessionBridge on its own: a clock that says `clock.now`, an agent list, a Home Assistant that answers. */
@@ -1019,11 +1095,13 @@ test('a counted call rides on the heartbeat; a step is reported at once', { opti
   expect(task().done).toBe(2)
 })
 
-test('a step hook that fails says so once, and the step stands', { options: OPTIONS }, async ($, on) => {
-  const { ha, modelStep } = await withAgent($, on)
-  await modelStep('a1', [null] as never)
-  await modelStep('a1', [null] as never)
-  expect(failed(ha, 'turn.step').length).toBe(1)
+test('a row hook that fails says so once, and the row is kept once', { options: OPTIONS }, async ($, on) => {
+  const kept = mock.session(on)
+  const { ha } = await withAgent($, on)
+  const broken = { type: 'assistant' as const, role: 'assistant' as const, content: [null] as never }
+  for (const uuid of ['row-b1', 'row-b2']) await $.session.append({ message: broken, door: 'response', origin: { kind: 'model', model: 'claude' }, uuid, agentId: 'a1' })
+  expect(failed(ha, 'session.append').length).toBe(1)
+  expect(kept.appended().length).toBe(2)
 })
 
 const failed = (ha: ReturnType<typeof mockHa>, where: string) => ha.logs.filter(l => l.startsWith(`tessera-bridge: ${where} failed`))

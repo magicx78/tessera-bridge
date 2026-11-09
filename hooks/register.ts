@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { backgroundStart, endedTasks, notificationText, PROGRESS_TOOLS, progressReport, runningTasks, stoppedTask } from './background'
+import { backgroundStart, endedTasks, notificationText, PROGRESS_TOOLS, progressReport, runningTasks, stepCalls, stoppedTask, toolAnswers } from './background'
 import { readConfig } from './ha'
 import type { Host } from './host'
 import { nonce, toToolAnswers, type ToolAnswers } from './questions'
@@ -108,7 +108,8 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
   // A background agent's step report moves its task's bar. The session is only looked up (`peek`): a subagent's loop
-  // must not start one. Two hooks hear the same report, as a hook above ours may keep the other from it; twice is harmless.
+  // must not start one. Several hooks hear the same report, as a hook above ours may keep the others from it; each hears
+  // it only once it ran, or (PostToolUse) only as the step tool's own rules take it, and twice is harmless.
   const takeProgress = (tool: string, input: unknown, agentId: unknown) => {
     const progress = progressReport(tool, input)
     if (!host || !progress || typeof agentId !== 'string' || !agentId) return
@@ -119,23 +120,27 @@ export const register: Register = (on, options) => {
     takeProgress(e.tool_name, e.tool_input, e.agent_id)
     return next(e)
   }).catch(($, e, next) => next(e))
-  // The source that works in a real session: the model's response of a subagent's loop. A step tool is served inside
-  // its owner's own tool.call hook, which answers without next, so neither the tool.call hook below nor PostToolUse ever
-  // hears it; the response lists the call whoever answers it. Only step reports are read here: a call the response asks
-  // for may still be refused, so the agent's calls are counted in the tool.call hook below, once they ran. A step the
-  // step tool refuses is not seen here (the response carries no result); one that makes no sense is left out already.
-  on('turn.step', async function* ($, e, next) {
-    const step = yield* next(e)
-    try {
-      if (host && e.agentId) {
-        for (const use of step.toolUses) if (PROGRESS_TOOLS.has(use.name)) takeProgress(use.name, use.input, e.agentId)
+  // The source that works in a real session: the rows a subagent's loop keeps. A step tool is served inside its owner's
+  // own tool.call hook, which answers without next, so neither the tool.call hook below nor PostToolUse ever hears it;
+  // the loop keeps the call and the tool's answer as rows whoever answers it. The model asking for a step is no step
+  // taken: the tool may still refuse it (a note too long, nobody answering it). So a call waits here, by its id, until
+  // the answer's row comes; only one the tool took moves the bar. A call whose answer never comes gives way to newer ones.
+  const MAX_WAITING_STEPS = 64
+  const waitingSteps = new Map<string, { tool: string; input: unknown; agentId: string }>()
+  const takeStepRow = (door: string, content: ReadonlyArray<{ type: string; [field: string]: unknown }>, agentId: string) => {
+    if (door === 'response') {
+      for (const call of stepCalls(content)) waitingSteps.set(call.id, { ...call, agentId })
+      for (const id of waitingSteps.keys()) if (waitingSteps.size > MAX_WAITING_STEPS) waitingSteps.delete(id)
+    } else if (door === 'tool-result') {
+      for (const answer of toolAnswers(content)) {
+        const call = waitingSteps.get(answer.id)
+        // Only the answer in the call's own loop is its answer.
+        if (!call || call.agentId !== agentId) continue
+        waitingSteps.delete(answer.id)
+        if (!answer.refused) takeProgress(call.tool, call.input, call.agentId)
       }
-    } catch (err) {
-      // The display is not worth a model response: whatever went wrong here, the step stands.
-      failed('turn.step', err)
     }
-    return step
-  })
+  }
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const h = host
@@ -287,14 +292,21 @@ export const register: Register = (on, options) => {
 
   // A notification that comes while its loop (main or a subagent's) is mid-turn is no prompt: it is kept as a row, an
   // attachment (`queued_command`), and the queue's record of it. Every row of every loop passes here; only the rows
-  // `notificationText` takes are read, and none is changed.
+  // `notificationText` takes are read, and none is changed. A subagent's step calls and their answers are read from the
+  // row as kept (a hook may rewrite an answer's `is_error`), after `next`: what fails then is caught, the row kept once.
   on('session.append', async ($, e, next) => {
     const text = host ? notificationText(e) : null
     if (text) {
       const session = bridge.peek()
       for (const id of endedTasks(text)) session?.endTask(id)
     }
-    return next(e)
+    const kept = await next(e)
+    try {
+      if (host && e.agentId && kept.deny === undefined) takeStepRow(e.door, kept.message.content, e.agentId)
+    } catch (err) {
+      failed('session.append', err)
+    }
+    return kept
   }).catch(($, e, next) => next(e))
 
   // The end of the main turn names the background work still in flight: a task it named before and names no more is

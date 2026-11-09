@@ -166,15 +166,55 @@ export type Progress = { done: number; total: number; note?: string }
 /** The tools an agent reports its steps with; both take `{ done, total, note? }`. */
 export const PROGRESS_TOOLS = new Set(['mcp__clawd-hq__step', 'mcp__savvy-progress__step'])
 
-/** The progress a step call reports, or null for another tool or a report that makes no sense (it would draw a wrong bar). */
+/** Clawd HQ's step tool takes a plan of at most this many steps, and a note of at most NOTE_MAX characters. */
+const CLAWD_STEP = 'mcp__clawd-hq__step'
+const CLAWD_PLAN_MAX = 12
+/** What Clawd HQ's step tool turns into spaces before it counts a note, and the screen never shows: control characters and hidden marks. */
+const UNSEEN = /[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁩﻿\u{e0000}-\u{e007f}]/gu
+
+/** Whether Clawd HQ's step tool refuses a report: a plan past 12 steps, or a note past 80 characters of clean text (it never cuts one). */
+function clawdRefuses(total: number, note: string | undefined): boolean {
+  const clean = (note ?? '').replace(UNSEEN, ' ').replace(/\s+/g, ' ').trim()
+  return total > CLAWD_PLAN_MAX || Array.from(clean).length > NOTE_MAX
+}
+
+/**
+ * The progress a step call reports, or null for another tool, a report that makes no sense (it would draw a wrong
+ * bar), or one its step tool refuses as the tool's own rules say. A long note the tool takes is cut for the screen.
+ */
 export function progressReport(tool: string, input: unknown): Progress | null {
   if (!PROGRESS_TOOLS.has(tool)) return null
   const i = (input ?? {}) as Record<string, unknown>
   if (typeof i.done !== 'number' || typeof i.total !== 'number') return null
   if (!Number.isInteger(i.done) || !Number.isInteger(i.total)) return null
+  // Both tools refuse a note that is no text: Clawd HQ's in its answer, savvy-progress by the schema it registers.
+  if (i.note !== undefined && typeof i.note !== 'string') return null
+  if (tool === CLAWD_STEP && clawdRefuses(i.total, i.note)) return null
   const done = Math.min(i.done, PROGRESS_MAX)
   const total = Math.min(i.total, PROGRESS_MAX)
   if (total < 1 || done < 0 || done > total) return null
-  const note = typeof i.note === 'string' ? oneLine(i.note, NOTE_MAX) : ''
+  const note = typeof i.note === 'string' ? oneLine(i.note.replace(UNSEEN, ' '), NOTE_MAX) : ''
   return note ? { done, total, note } : { done, total }
+}
+
+type Block = { type: string; [field: string]: unknown }
+
+/** The step calls a model response row holds: each call's id, tool and arguments. */
+export function stepCalls(content: ReadonlyArray<Block>): Array<{ id: string; tool: string; input: unknown }> {
+  const calls: Array<{ id: string; tool: string; input: unknown }> = []
+  for (const block of content) {
+    if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string' && PROGRESS_TOOLS.has(block.name)) {
+      calls.push({ id: block.id, tool: block.name, input: block.input })
+    }
+  }
+  return calls
+}
+
+/** The calls a tool-result row answers: each call's id, and whether its tool refused it (`is_error`). */
+export function toolAnswers(content: ReadonlyArray<Block>): Array<{ id: string; refused: boolean }> {
+  const answers: Array<{ id: string; refused: boolean }> = []
+  for (const block of content) {
+    if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') answers.push({ id: block.tool_use_id, refused: block.is_error === true })
+  }
+  return answers
 }

@@ -1,6 +1,6 @@
 {
   "name": "tessera-bridge",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Reports every Claude session (state, context, the account's limits, open questions) to the tessera_claude integration in Home Assistant, so Tessera screens show them all and answer questions",
   "author": {
     "name": "magicx78"
