@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12
+- The bar under a background task now FILLS as the task goes: at "Step 1 of 3" it is one third full (before it showed what was left, two thirds). Without steps it fills with the task's age over eight hours (before it shrank). Colours (accent, amber from one hour, red from four) are unchanged; the tile and the card "Claude in the background" both follow. Nothing to do.
+- The animation of the activity tile uses at most two lanes on every tile size (the muncher had up to six on a tall tile), so a 2x3 tile looks calmer. Nothing to do.
+
 ## 0.1.11
 - The activity tile can be 2x3 (and 1x3), and its animation grows with the tile: on a wide tile the picture fills the whole right half from under the head to the bottom edge. The mosaic lays as many square stones as the room holds (more rows on a tall tile), the muncher gets a lane for each stretch of height, and the spark takes the height (two sparks on a tall tile). 1x1, 2x1 and narrow tiles look as before. Nothing to do; place the tile as 2x3 in the layout editor if you want it taller.
 - The card "Claude in the background" shows how many actions (tool calls) an agent has made so far, "5 actions", when it reports neither steps nor a note, instead of "no progress reported". Shells, and agents with steps or a note, look as before. Needs the integration 0.2.6 (the sensor's `bg_calls`); with an older integration the card looks as before.

@@ -436,9 +436,9 @@ class TileMotion {
   static constexpr int LANE = STONES + 3;          // one muncher lane: body, mouth, eye and its stones
   static constexpr int SPARK = 1 + ARMS * DOTS;    // one spark: its core and its dots
   static constexpr int CLASSIC = 15;               // the mosaic of a small room: 5 x 3 stones
-  // The most a room can ask: the mosaic 7 x 8 stones, 6 muncher lanes, 2 sparks. The tile makes only what its biggest
+  // The most a room can ask: the mosaic 7 x 8 stones, 2 muncher lanes, 2 sparks. The tile makes only what its biggest
   // room needs, so a small screen keeps few parts and the rest of this stays unused.
-  static constexpr int MAX_COLS = 7, MAX_ROWS = 8, MAX_LANES = 6, MAX_SPARKS = 2;
+  static constexpr int MAX_COLS = 7, MAX_ROWS = 8, MAX_LANES = 2, MAX_SPARKS = 2;
   static constexpr int MAX_PARTS = MAX_COLS * MAX_ROWS;
   static_assert(MAX_LANES * LANE <= MAX_PARTS && MAX_SPARKS * SPARK <= MAX_PARTS && CLASSIC <= MAX_PARTS,
                 "every motion's most parts fit one list");
@@ -1448,15 +1448,15 @@ static Tone age_tone(const BackgroundRow &row, uint32_t epoch) {
 
 static bool has_progress(const BackgroundRow &row) { return row.total > 0 && row.done >= 0 && row.done <= row.total; }
 
-// What is left of a task, in thousandths: by the steps it reported, else by its age against eight hours. Never less
-// than a sliver while it runs.
-static int remaining_share_pm(const BackgroundRow &row, uint32_t epoch) {
+// How far a task is, in thousandths: the bar FILLS. By the steps it reported (done / total), else by its age against
+// eight hours (0.1.12: it used to show what was left). Never less than a sliver while it runs.
+static int progress_share_pm(const BackgroundRow &row, uint32_t epoch) {
   static constexpr uint32_t AGE_SPAN = 8 * 3600;
-  int pm = 1000;
+  int pm = 0;
   if (has_progress(row)) {
-    pm = (row.total - row.done) * 1000 / row.total;
+    pm = row.done * 1000 / row.total;
   } else if (row.at && epoch >= row.at) {
-    pm = 1000 - static_cast<int>(std::min<uint32_t>(epoch - row.at, AGE_SPAN) * 1000 / AGE_SPAN);
+    pm = static_cast<int>(std::min<uint32_t>(epoch - row.at, AGE_SPAN) * 1000 / AGE_SPAN);
   }
   return std::max(60, std::min(1000, pm));
 }
@@ -1686,7 +1686,7 @@ class BackgroundTile : public tessera::Tile {
     }
 
     // A list: per task its kind, its title, and at the right when it started and, where there is room, for how long
-    // (or how many of its steps are done); under it a bar of what is left, coloured by its age.
+    // (or how many of its steps are done); under it a bar that fills with its progress, coloured by its age.
     hide(big_, true);
     hide(note_, true);
     const int icon_h = ui::line_height(Font::ICON_SMALL);
@@ -1737,7 +1737,7 @@ class BackgroundTile : public tessera::Tile {
       ui::set_text(title, row.title);
       ui::set_color(title, theme::INK_SOFT);
       paint_bar(row_track_[shown], row_fill_[shown], icon_w, y + line_h + bar_gap, width_ - icon_w, bar_h_,
-                remaining_share_pm(row, epoch), age_tone(row, epoch));
+                progress_share_pm(row, epoch), age_tone(row, epoch));
       y += step;
       shown += 1;
     }
@@ -2077,8 +2077,8 @@ class BackgroundCard : public tessera::Card {
       lv_obj_set_pos(row_line_[i], pad_, top);
       ui::set_text(row_line_[i], line);
       top += line2_ + bar_gap_;
-      // What is left of it, coloured by its age.
-      paint_bar(row_track_[i], row_fill_[i], pad_, top, inner, bar_h_, remaining_share_pm(row, epoch), tone);
+      // How far it is (the bar fills), coloured by its age.
+      paint_bar(row_track_[i], row_fill_[i], pad_, top, inner, bar_h_, progress_share_pm(row, epoch), tone);
       top += bar_h_ + bar_gap_;
       // The steps and the note, or that the task reports none.
       std::string step;
