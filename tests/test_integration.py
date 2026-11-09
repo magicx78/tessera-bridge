@@ -4,9 +4,18 @@
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 import voluptuous as vol
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events, async_mock_service
+from homeassistant.auth.const import GROUP_ID_ADMIN, GROUP_ID_USER
+from homeassistant.core import Context
+from homeassistant.exceptions import Unauthorized
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+    async_mock_service,
+)
 
 from custom_components.tessera_claude.const import DOMAIN
 
@@ -312,3 +321,158 @@ async def test_the_lists_that_change_with_every_report_stay_out_of_the_recorder(
     bg = {k for k in background.attributes if k.startswith("bg_")}
     assert bg and bg <= background.state_info["unrecorded_attributes"]
     assert "rev" in hass.states.get("sensor.claude_sessions").state_info["unrecorded_attributes"]
+
+
+# --- allowed users (stage 1) -------------------------------------------------------------------------------------
+
+
+SERVICE_CALLS = [
+    ("get_overview", {}),
+    ("get_question", {"question": "q1"}),
+    ("get_hint", {"session": "s1"}),
+    ("answer", {"question": "q1", "answers": {}}),
+    ("get_background", {}),
+    ("set_notify", {"mode": "tone"}),
+]
+
+
+async def make_user(hass, name, admin=False):
+    return await hass.auth.async_create_user(name, group_ids=[GROUP_ID_ADMIN if admin else GROUP_ID_USER])
+
+
+async def call_as(hass, service, data, user_id):
+    return await hass.services.async_call(
+        DOMAIN, service, data, blocking=True, return_response=True, context=Context(user_id=user_id)
+    )
+
+
+@pytest.mark.parametrize(("service", "data"), SERVICE_CALLS)
+async def test_a_listed_user_only_may_call_when_the_list_is_set(hass, service, data):
+    tessera = await make_user(hass, "Tessera Screen")
+    other = await make_user(hass, "Other")
+    await setup_entry(hass, {"allowed_users": [tessera.id]})
+    with pytest.raises(Unauthorized):
+        await call_as(hass, service, data, other.id)
+    await call_as(hass, service, data, tessera.id)
+
+
+async def test_without_a_list_everyone_may_call(hass):
+    other = await make_user(hass, "Other")
+    await setup_entry(hass)
+    assert await call_as(hass, "get_background", {}, other.id) == {"tasks": []}
+
+
+async def test_calls_without_a_user_stay_allowed(hass):
+    tessera = await make_user(hass, "Tessera Screen")
+    await setup_entry(hass, {"allowed_users": [tessera.id]})
+    assert await call_as(hass, "get_background", {}, None) == {"tasks": []}
+
+
+async def test_admins_pass_even_when_not_listed(hass):
+    tessera = await make_user(hass, "Tessera Screen")
+    admin = await make_user(hass, "Boss", admin=True)
+    await setup_entry(hass, {"allowed_users": [tessera.id]})
+    assert await call_as(hass, "get_background", {}, admin.id) == {"tasks": []}
+
+
+async def test_a_deleted_user_is_not_allowed_by_a_list(hass):
+    tessera = await make_user(hass, "Tessera Screen")
+    await setup_entry(hass, {"allowed_users": [tessera.id]})
+    with pytest.raises(Unauthorized):
+        await call_as(hass, "get_background", {}, "0123456789abcdef0123456789abcdef")
+
+
+async def test_each_caller_is_logged_once_with_its_name(hass, caplog):
+    other = await make_user(hass, "Other Person")
+    await setup_entry(hass)
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    for _ in range(3):
+        await call_as(hass, "get_background", {}, other.id)
+    lines = [r.getMessage() for r in caplog.records if other.id in r.getMessage()]
+    assert len(lines) == 1 and "Other Person" in lines[0]
+
+
+async def test_a_denied_caller_is_logged_too(hass, caplog):
+    tessera = await make_user(hass, "Tessera Screen")
+    other = await make_user(hass, "Other Person")
+    await setup_entry(hass, {"allowed_users": [tessera.id]})
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    with pytest.raises(Unauthorized):
+        await call_as(hass, "get_background", {}, other.id)
+    assert any("Other Person" in r.getMessage() for r in caplog.records)
+
+
+async def test_the_http_api_follows_the_list(
+    hass, hass_client, hass_read_only_access_token, hass_read_only_user, caplog
+):
+    reader = hass_read_only_user
+    await setup_entry(hass, {"allowed_users": [reader.id]})
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    # The listed user passes, the admin too, and a user off the list is refused.
+    assert (await post_report(await hass_client(hass_read_only_access_token))).status == 200
+    assert (await post_report(await hass_client())).status == 200
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    hass.config_entries.async_update_entry(entry, options={"allowed_users": ["someone-else"]})
+    await hass.async_block_till_done()
+    assert (await post_report(await hass_client(hass_read_only_access_token))).status == 403
+    assert (await post_report(await hass_client())).status == 200  # admin
+    assert any(reader.name in r.getMessage() for r in caplog.records)
+
+
+async def test_the_http_api_is_open_without_a_list(hass, hass_client, hass_read_only_access_token):
+    await setup_entry(hass)
+    assert (await post_report(await hass_client(hass_read_only_access_token))).status == 200
+
+
+async def test_the_options_form_offers_the_users_and_keeps_the_list(hass):
+    tessera = await make_user(hass, "Tessera Screen")
+    entry = await setup_entry(hass, {"allowed_users": [tessera.id, "gone"]})
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    keys = {str(key): key for key in form["data_schema"].schema}
+    assert keys["allowed_users"].description["suggested_value"] == [tessera.id, "gone"]
+    offered = {o["value"]: o["label"] for o in form["data_schema"].schema[keys["allowed_users"]].config["options"]}
+    assert offered[tessera.id] == "Tessera Screen" and "gone" in offered
+    done = await hass.config_entries.options.async_configure(form["flow_id"], {"allowed_users": [tessera.id]})
+    assert done["type"] == "create_entry"
+    assert entry.options["allowed_users"] == [tessera.id]
+
+
+async def test_a_refusal_after_the_list_was_set_is_logged_once(hass, caplog):
+    await make_user(hass, "Owner")  # the first user of a Home Assistant is its owner, hence an admin
+    other = await make_user(hass, "Other Person")
+    entry = await setup_entry(hass)
+    await call_as(hass, "get_background", {}, other.id)  # first seen while everyone is allowed
+    hass.config_entries.async_update_entry(entry, options={"allowed_users": ["someone-else"]})
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    for _ in range(2):
+        with pytest.raises(Unauthorized):
+            await call_as(hass, "get_background", {}, other.id)
+    lines = [r for r in caplog.records if "refused" in r.getMessage() and other.id in r.getMessage()]
+    assert len(lines) == 1 and lines[0].levelno == logging.WARNING and "Other Person" in lines[0].getMessage()
+
+
+async def test_a_call_without_a_user_is_logged_once(hass, caplog):
+    await setup_entry(hass)
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    for _ in range(2):
+        await call_as(hass, "get_background", {}, None)
+    assert len([r for r in caplog.records if "without a user" in r.getMessage()]) == 1
+
+
+async def test_stage_two_switch_refuses_calls_without_a_user(hass, monkeypatch):
+    from custom_components.tessera_claude import access
+
+    await setup_entry(hass)
+    monkeypatch.setattr(access, "ALLOW_CALLS_WITHOUT_USER", False)
+    with pytest.raises(Unauthorized):
+        await call_as(hass, "get_background", {}, None)
+
+
+async def test_emptying_the_list_in_the_options_form_sticks(hass):
+    tessera = await make_user(hass, "Tessera Screen")
+    entry = await setup_entry(hass, {"allowed_users": [tessera.id]})
+    form = await hass.config_entries.options.async_init(entry.entry_id)
+    # The frontend leaves out a field that was emptied.
+    done = await hass.config_entries.options.async_configure(form["flow_id"], {})
+    assert done["type"] == "create_entry"
+    assert entry.options["allowed_users"] == []

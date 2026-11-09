@@ -4,8 +4,8 @@
 
 **Alle laufenden Claude-Code-Sessions auf den Tessera-Touchscreens in Home Assistant – und Claudes Fragen direkt am Screen beantworten.**
 
-![Mod](https://img.shields.io/badge/Mod-0.2.6-7c3aed)
-![Integration](https://img.shields.io/badge/Integration-0.2.7-41bdf5)
+![Mod](https://img.shields.io/badge/Mod-0.2.8-7c3aed)
+![Integration](https://img.shields.io/badge/Integration-0.2.8-41bdf5)
 ![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.11-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
 ![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
@@ -90,6 +90,8 @@ Alle Felder im Formular sind optional:
 - ob eine Freigabe angesagt wird
 
 Später lässt sich das alles unter **Optionen** ändern.
+
+Unter **Optionen** gibt es ab Integration 0.2.8 außerdem **Erlaubte Nutzer** (`allowed_users`). Bleibt die Liste leer, darf jeder HA-Nutzer die Dienste und die HTTP-API aufrufen, wie bisher. Steht dort jemand, dürfen nur diese Nutzer und Administratoren. Aufrufe ohne Nutzer (Automationen, Skripte, Geräte-Aktionen) bleiben vorerst erlaubt. Jeder Aufrufer wird einmal ins Log geschrieben („Caller of tessera_claude: …“), so lassen sich die Nutzer des Screens und des Mods ablesen, bevor man die Liste füllt. Wer abgewiesen wird, steht einmal als Warnung im Log.
 
 Danach in deinem Home-Assistant-Profil unter **Sicherheit** ein langlebiges Zugriffstoken für den Mod anlegen.
 

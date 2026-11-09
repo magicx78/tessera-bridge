@@ -9,9 +9,10 @@ import logging
 import time
 
 from aiohttp import web
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import KEY_HASS_USER, HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from .access import async_is_allowed
 from .const import API_PATH, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +34,11 @@ class TesseraClaudeView(HomeAssistantView):
         entry = self.hass.data.get(DOMAIN, {}).get("entry")
         if entry is None or not hasattr(entry, "runtime_data"):
             return self.json_message("tessera_claude is not set up", status_code=503)
+        user = request.get(KEY_HASS_USER)
+        if user is None:  # authenticated but without a user: refused whatever ALLOW_CALLS_WITHOUT_USER says
+            return self.json_message("no user", status_code=401)
+        if not await async_is_allowed(self.hass, entry, user.id):
+            return self.json_message("user not allowed", status_code=403)
         try:
             body = await request.json()
         except ValueError:

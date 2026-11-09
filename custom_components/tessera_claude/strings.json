@@ -26,7 +26,8 @@
           "tts": "Speech engine (tts entity, empty for Chime TTS's default)",
           "language": "Speech language",
           "notify": "Announce a question or hint",
-          "hints": "Announce permission prompts"
+          "hints": "Announce permission prompts",
+          "allowed_users": "Users allowed to call the services and the API (empty: everyone; administrators and calls without a user always pass)"
         }
       }
     }

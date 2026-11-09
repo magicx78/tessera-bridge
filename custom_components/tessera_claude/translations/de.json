@@ -26,7 +26,8 @@
           "tts": "Sprachausgabe (tts-Entität, leer für den Chime-TTS-Standard)",
           "language": "Sprache",
           "notify": "Ansage bei Frage oder Hinweis",
-          "hints": "Freigabe-Anfragen ansagen"
+          "hints": "Freigabe-Anfragen ansagen",
+          "allowed_users": "Nutzer, die die Dienste und die API aufrufen dürfen (leer: alle; Administratoren und Aufrufe ohne Nutzer gehen immer durch)"
         }
       }
     }

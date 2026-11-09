@@ -16,6 +16,8 @@ CONF_NOTIFY = "notify"
 # The old yes/no "read the question aloud"; only the migration and Announcer.reload() still look at it.
 CONF_SPEAK = "speak"
 CONF_HINTS = "hints"
+# User ids allowed to call the services and the HTTP API (empty: everyone; see access.py).
+CONF_ALLOWED_USERS = "allowed_users"
 
 DEFAULT_CHIME = "chirp"
 DEFAULT_LANGUAGE = "de-DE"
