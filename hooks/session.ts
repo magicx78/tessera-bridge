@@ -109,6 +109,9 @@ export class SessionBridge {
   private readonly waiters = new Map<string, Waiter[]>()
   private lastReportAt = 0
   private dirty = true
+  /** Reports on their way to Home Assistant, and whether a tick is running: a tick waits for neither. */
+  private reporting = 0
+  private ticking = false
   private ended = false
 
   constructor(
@@ -227,8 +230,19 @@ export class SessionBridge {
   }
 
   /**
+   * Whether agent `id` waits on work of its own: a task its loop started is still running. The engine takes such an
+   * agent's task as `completed` (a Stop's list of work in flight names its shell, not it), and its agent list may drop
+   * it; the agent is not over until that work is (the engine notifies its end only once it has no live work left).
+   */
+  private waitsOnOwnWork(id: string): boolean {
+    for (const task of this.tasks.values()) if (task.owner === id) return true
+    return false
+  }
+
+  /**
    * Ends every task (of `kind`, or any) that the engine's list `source` named as running before and does no more. One
-   * it never named stays: the list may not have caught up with the start yet, or spell the id otherwise.
+   * it never named stays: the list may not have caught up with the start yet, or spell the id otherwise. So does an
+   * agent waiting on its own work; it has to be named again before the list's silence counts.
    */
   sweepTasks(source: string, running: ReadonlySet<string>, kind?: BackgroundKind) {
     const listed = this.listed.get(source) ?? new Set<string>()
@@ -236,13 +250,15 @@ export class SessionBridge {
     for (const [id, task] of Array.from(this.tasks)) {
       if (kind !== undefined && task.kind !== kind) continue
       if (running.has(id)) listed.add(id)
+      else if (task.kind === 'agent' && this.waitsOnOwnWork(id)) listed.delete(id)
       else if (listed.has(id)) this.endTask(id)
     }
   }
 
   /**
    * The net under an agent's turn.complete: the engine's agent list says which agents are over. With `only`, just that
-   * agent is looked at, and one the list no longer names is over too (its turn is done, so it had been listed).
+   * agent is looked at, and one the list no longer names is over too (its turn is done, so it had been listed). An agent
+   * waiting on its own work is over only as `failed` or `killed`: neither the list's silence nor `completed` ends it.
    */
   async sweepAgents(host: Host, only?: string) {
     if (this.ended || !Array.from(this.tasks.values()).some(t => t.kind === 'agent')) return
@@ -255,24 +271,38 @@ export class SessionBridge {
       this.agentsFailed = true
       return
     }
+    const isOver = (id: string, status: AgentInfo['status'] | undefined) =>
+      status === 'failed' || status === 'killed' || ((status === undefined || AGENT_OVER.has(status)) && !this.waitsOnOwnWork(id))
     if (only !== undefined) {
-      const agent = agents.find(a => a.id === only)
-      if (!agent || AGENT_OVER.has(agent.status)) this.endTask(only)
+      if (isOver(only, agents.find(a => a.id === only)?.status)) this.endTask(only)
       return
     }
-    const over = agents.filter(a => AGENT_OVER.has(a.status) && this.tasks.get(a.id)?.kind === 'agent')
+    const over = agents.filter(a => AGENT_OVER.has(a.status) && this.tasks.get(a.id)?.kind === 'agent' && isOver(a.id, a.status))
     for (const agent of over) this.endTask(agent.id)
     this.sweepTasks('agents', new Set(agents.filter(a => !AGENT_OVER.has(a.status)).map(a => a.id)), 'agent')
   }
 
-  /** Sends the report; hands every open question's status to whoever waits for it. Undefined when HA is down. */
+  /**
+   * Sends the report; hands every open question's status to whoever waits for it. Undefined when HA is down. The
+   * report holds every change up to its sending: one made while it is on its way marks the state changed again.
+   */
   async report(host: Host): Promise<ReportReply | undefined> {
     if (this.ended) return undefined
     const now = await host.now()
-    const reply = await quietly(host, () => apiCall(host, this.cfg, '/report', this.body(now)))
-    if (reply === undefined) return undefined
-    this.lastReportAt = now
     this.dirty = false
+    this.reporting += 1
+    let reply: Json | undefined
+    try {
+      reply = await quietly(host, () => apiCall(host, this.cfg, '/report', this.body(now)))
+    } finally {
+      this.reporting -= 1
+    }
+    if (reply === undefined) {
+      // Not sent: the next tick tries again.
+      this.dirty = true
+      return undefined
+    }
+    this.lastReportAt = now
     const statuses = (reply.questions ?? {}) as Record<string, QuestionStatus>
     for (const [id, status] of Object.entries(statuses)) {
       const question = this.questions.get(id)
@@ -283,14 +313,23 @@ export class SessionBridge {
     return { ok: reply.ok === true, handle: typeof reply.handle === 'string' ? reply.handle : undefined, questions: statuses }
   }
 
-  /** The timer's tick: a report when something changed, a question is open, or the heartbeat is due. */
+  /**
+   * The timer's tick: a report when something changed, a question is open, or the heartbeat is due. Skipped while the
+   * last tick or a report is still on its way, so a slow Home Assistant gets no pile of them.
+   */
   async tick(host: Host) {
-    await this.sweepAgents(host)
-    const now = await host.now()
-    // A task not heard of for a day is taken as gone: out of the map, so it holds no place and no agent sweep.
-    for (const [id, task] of Array.from(this.tasks)) if (now - task.startedAt >= TASK_MAX_AGE_MS) this.endTask(id)
-    const due = now - this.lastReportAt >= HEARTBEAT_MS
-    if (this.dirty || this.questions.size > 0 || due) await this.report(host)
+    if (this.ticking || this.reporting > 0) return
+    this.ticking = true
+    try {
+      await this.sweepAgents(host)
+      const now = await host.now()
+      // A task not heard of for a day is taken as gone: out of the map, so it holds no place and no agent sweep.
+      for (const [id, task] of Array.from(this.tasks)) if (now - task.startedAt >= TASK_MAX_AGE_MS) this.endTask(id)
+      const due = now - this.lastReportAt >= HEARTBEAT_MS
+      if (this.dirty || this.questions.size > 0 || due) await this.report(host)
+    } finally {
+      this.ticking = false
+    }
   }
 
   /** Registers a question for the display and reports it at once. */
@@ -446,6 +485,8 @@ const INSTANCE_KEY = 'instanceId'
  */
 export class Bridge {
   private current: SessionBridge | null = null
+  /** The starts under way, by session id. */
+  private readonly starting = new Map<string, Promise<SessionBridge>>()
   private instance: string | null = null
   private timer: { cancel: () => void } | null = null
 
@@ -455,10 +496,22 @@ export class Bridge {
     return this.cfg.token.length > 0
   }
 
-  /** The bridge of this engine's session, started on first use. */
+  /**
+   * The bridge of this engine's session, started on first use. Hooks that ask at once for a session not started yet
+   * (after /clear or a resume) wait for the one start, so what one of them sets on it stays.
+   */
   async session(host: Host): Promise<SessionBridge> {
     const id = await host.sessionId()
     if (this.current && this.current.sessionId === id) return this.current
+    const pending = this.starting.get(id)
+    if (pending) return pending
+    const started = this.start(host, id).finally(() => this.starting.delete(id))
+    this.starting.set(id, started)
+    return started
+  }
+
+  /** Ends the bridge before, and starts the one of session `id`. */
+  private async start(host: Host, id: string): Promise<SessionBridge> {
     if (this.current) await this.current.end(host, 'replaced')
     const instance = await this.instanceId(host)
     const session = new SessionBridge(instance, id, this.cfg)

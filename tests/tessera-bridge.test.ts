@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentStatus, SessionAppendInput, ToolCallResult } from 'claude-code'
+import type { AgentInfo, AgentStatus, HttpInit, HttpResponse, SessionAppendInput, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
@@ -7,7 +7,7 @@ import { baseName, describeCall } from '../hooks/describe'
 import { readConfig } from '../hooks/ha'
 import type { Host } from '../hooks/host'
 import { toReported, toToolAnswers } from '../hooks/questions'
-import { POLL_MS, SessionBridge } from '../hooks/session'
+import { Bridge, POLL_MS, SessionBridge } from '../hooks/session'
 
 const OPTIONS = {
   haUrl: 'http://ha.test:8123',
@@ -372,6 +372,15 @@ test('a shell command without a description is shortened for the screen', () => 
   expect(shortenCommand('   ', 'Monitor')).toBe('Monitor')
 })
 
+test('a long title is cut in whole characters, never inside an emoji', () => {
+  const title = (description: string) => backgroundStart('Bash', { command: 'x', description }, { backgroundTaskId: 'b1' })?.title
+  const smile = '\u{1F600}'
+  // 80 characters in 82 UTF-16 units: not cut at all.
+  expect(title('x'.repeat(78) + smile + smile)).toBe('x'.repeat(78) + smile + smile)
+  // 81 characters: cut to 79 and the ellipsis, the emoji whole.
+  expect(title('x'.repeat(78) + smile.repeat(3))).toBe('x'.repeat(78) + smile + '…')
+})
+
 test('a background shell without a description shows a short title', { options: OPTIONS }, async ($, on) => {
   const clock = mock.clock(on)
   const ha = mockHa(on)
@@ -396,7 +405,9 @@ test('progress is read from the step tools and nowhere else', () => {
   })
   expect(progressReport('mcp__savvy-progress__step', { done: 0, total: 1 })).toEqual({ done: 0, total: 1 })
   expect(progressReport('mcp__clawd-hq__step', { done: 3, total: 3, note: '   ' })).toEqual({ done: 3, total: 3 })
-  expect(progressReport('mcp__clawd-hq__step', { done: 6, total: 5 })).toBe(null)
+  // Clawd HQ's step tool takes a step past the plan as the plan done; savvy-progress gets no bar for it.
+  expect(progressReport('mcp__clawd-hq__step', { done: 6, total: 5 })).toEqual({ done: 5, total: 5 })
+  expect(progressReport('mcp__savvy-progress__step', { done: 6, total: 5 })).toBe(null)
   expect(progressReport('mcp__clawd-hq__step', { done: 1.5, total: 5 })).toBe(null)
   expect(progressReport('mcp__clawd-hq__step', { done: 1, total: 0 })).toBe(null)
   expect(progressReport('mcp__clawd-hq__step', { done: -1, total: 5 })).toBe(null)
@@ -460,7 +471,7 @@ async function withAgent($: Parameters<TestBody>[0], on: Parameters<TestBody>[1]
     return ids
   }
   await start($)
-  await $.tool.call({ tool: 'Agent', description: 'Review', run_in_background: true, tool_use_id: 't11' })
+  await $.tool.call({ tool: 'Agent', description: 'Review', prompt: 'Review', tool_use_id: 't11' })
   await clock.advance(2_000)
   const task = () => (ha.lastReport()?.tasks as Array<Record<string, unknown>>)[0]!
   return { clock, ha, task, agents, modelStep, answerStep }
@@ -574,6 +585,18 @@ test("a step report Clawd HQ's step tool refuses is no progress; savvy-progress 
   expect(savvy({ done: 1, total: 2, note: 'x'.repeat(200) })?.note?.length).toBe(80)
 })
 
+test("a Clawd HQ step past 12 steps never moves the bar, even when its tool's answer is no refusal", { options: OPTIONS }, async ($, on) => {
+  const { clock, task, modelStep } = await withAgent($, on)
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 1, total: 13 } }])
+  await clock.advance(2_000)
+  expect(task().total).toBe(undefined)
+
+  // A step past the plan the tool takes is the plan done.
+  await modelStep('a1', [{ name: 'mcp__clawd-hq__step', input: { done: 6, total: 5 } }])
+  await clock.advance(2_000)
+  expect([task().done, task().total]).toEqual([5, 5])
+})
+
 test('a shell has no tool calls to count', { options: OPTIONS }, async ($, on) => {
   const clock = mock.clock(on)
   const ha = mockHa(on)
@@ -682,7 +705,7 @@ test("an agent the list has dropped ends at its turn.complete", { options: OPTIO
 test('a progress report logs once, and only when it moves a known task', { options: OPTIONS }, async ($, on) => {
   const { clock, ha } = await withAgent($, on)
   const logged = () => ha.logs.filter(l => l.includes('progress of'))
-  const step = { tool: 'mcp__clawd-hq__step', done: 2, total: 5, note: 'Writing', tool_use_id: 't20' }
+  const step = { tool: 'mcp__clawd-hq__step' as const, done: 2, total: 5, note: 'Writing', tool_use_id: 't20' }
 
   // An unknown agent id: nothing logged, nothing changed.
   await $.tool.call({ ...step, agentId: 'zz' })
@@ -711,7 +734,7 @@ test('an agent the engine lists as over, or stops listing, leaves the report; on
   on('agent.list', () => ({ value: listed }))
 
   await start($)
-  for (const id of ['t30', 't31', 't32']) await $.tool.call({ tool: 'Agent', description: 'x', run_in_background: true, tool_use_id: id })
+  for (const id of ['t30', 't31', 't32']) await $.tool.call({ tool: 'Agent', description: 'x', prompt: 'x', tool_use_id: id })
   // Right after the launch the list may not name them yet: nothing goes.
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['a1', 'a2', 'a3'])
@@ -859,6 +882,47 @@ test("a subagent's shell whose notification comes into the agent's running turn 
   await $.session.append(appendRow(finalNotification('b7'), { agentId: 'a1' }))
   await clock.advance(2_000)
   expect(taskIds(ha)).toEqual(['a1'])
+})
+
+test("an agent waiting on its own shell stays, with the shell, though the main Stop and the agent list stop naming it", { options: OPTIONS }, async ($, on) => {
+  // As seen on 2026-11-10: a background agent started a 3-hour shell and ended its turn waiting on it. The engine's
+  // task of a waiting agent is `completed`, so the main loop's next Stop names the shell in flight but not the agent;
+  // the agent list may drop it as well. Neither ends the agent while a task of its own still runs.
+  on('classic.Stop', () => ({}))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b7' } }))
+  const { clock, ha, agents } = await withAgent($, on)
+  const inFlight = (id: string, type: string) => ({ id, type, status: 'running', description: '' })
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [inFlight('a1', 'subagent')] })
+  await $.tool.call({ tool: 'Bash', command: 'bash chain2.sh varB varC vbase', run_in_background: true, agentId: 'a1', tool_use_id: 't64' })
+  await $.prompt.submit({ text: interimNotification('a1'), origin: { kind: 'task-notification' }, wait: false })
+  agents.list = [agentInfo('a1', 'waiting')]
+  await $.turn.complete(turnDone('a1'))
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  // The main session's later turns end: their Stop names the shell, not the waiting agent.
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [inFlight('b7', 'shell')] })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  // The agent list drops it, or calls it completed, while its shell runs on.
+  agents.list = []
+  await clock.advance(2_000)
+  agents.list = [agentInfo('a1', 'completed')]
+  await clock.advance(2_000)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [inFlight('b7', 'shell')] })
+  await clock.advance(6_000)
+  expect(taskIds(ha)).toEqual(['a1', 'b7'])
+
+  // The shell ends and the agent resumes; its final notification ends it.
+  agents.list = [agentInfo('a1', 'running')]
+  await $.prompt.submit({ text: finalNotification('b7'), origin: { kind: 'task-notification' }, wait: false })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual(['a1'])
+  await $.prompt.submit({ text: finalNotification('a1'), origin: { kind: 'task-notification' }, wait: false })
+  await clock.advance(2_000)
+  expect(taskIds(ha)).toEqual([])
 })
 
 test('notification text in a tool result, a tool message, a model response or a typed prompt ends nothing', { options: OPTIONS }, async ($, on) => {
@@ -1035,13 +1099,104 @@ test('a task past a day is gone from the session at the tick, not only from the 
   expect(Array.from(s.tasks.keys())).toEqual(['b2'])
 })
 
+/** Lets every pending promise step on, as far as it gets without a timer or an answer. */
+const drain = async () => {
+  for (let i = 0; i < 50; i++) await Promise.resolve()
+}
+
+/** A bareHost whose Home Assistant answers a report only when the test lets it (`answer`); `sent` holds each report's body. */
+function slowHa(clock: { now: number }) {
+  const waiting: Array<() => void> = []
+  const sent: Array<Record<string, unknown>> = []
+  const fetch = (_url: string, init?: HttpInit) => {
+    sent.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+    return new Promise<HttpResponse>(resolve => waiting.push(() => resolve({ status: 200, ok: true, headers: {}, text: '{"ok": true}' } as HttpResponse)))
+  }
+  const answer = () => waiting.shift()?.()
+  return { host: { ...bareHost(clock), fetch }, sent, answer }
+}
+
+test('a change made while a report is on its way goes out at the next tick, not with the heartbeat', async () => {
+  const clock = { now: 0 }
+  const ha = slowHa(clock)
+  const s = new SessionBridge('i', 's', readConfig(OPTIONS))
+  const first = s.tick(ha.host)
+  await drain()
+  expect(ha.sent.length).toBe(1)
+  s.startTask({ id: 'b1', kind: 'shell', title: 'late' }, clock.now)
+  ha.answer()
+  await first
+
+  clock.now = POLL_MS
+  const second = s.tick(ha.host)
+  await drain()
+  expect(ha.sent.length).toBe(2)
+  expect((ha.sent[1]?.tasks as Array<{ id: string }>).map(t => t.id)).toEqual(['b1'])
+  ha.answer()
+  await second
+})
+
+test('a tick while a report is on its way sends none of its own', async () => {
+  const clock = { now: 0 }
+  const ha = slowHa(clock)
+  const s = new SessionBridge('i', 's', readConfig(OPTIONS))
+  const first = s.tick(ha.host)
+  await drain()
+  s.touch()
+  clock.now = POLL_MS
+  void s.tick(ha.host)
+  await drain()
+  expect(ha.sent.length).toBe(1)
+  ha.answer()
+  await first
+})
+
+test('a report Home Assistant refused is sent again at the next tick', async () => {
+  const clock = { now: 0 }
+  let calls = 0
+  const fetch = async () => {
+    calls += 1
+    return { status: calls === 1 ? 503 : 200, ok: calls > 1, headers: {}, text: '{"ok": true}' } as HttpResponse
+  }
+  const host = { ...bareHost(clock), fetch }
+  const s = new SessionBridge('i', 's', readConfig(OPTIONS))
+  await s.tick(host)
+  clock.now = POLL_MS
+  await s.tick(host)
+  expect(calls).toBe(2)
+})
+
+test('hooks that race for a new session share one bridge, and the old one ends once', async () => {
+  const clock = { now: 0 }
+  const session = { id: 'old' }
+  const ends: string[] = []
+  const host: Host = {
+    ...bareHost(clock),
+    sessionId: async () => session.id,
+    fetch: async (url: string, init?: HttpInit) => {
+      if (url.endsWith('/end')) ends.push(String((JSON.parse(String(init?.body)) as { session: string }).session))
+      return { status: 200, ok: true, headers: {}, text: '{"ok": true}' } as HttpResponse
+    },
+  }
+  const bridge = new Bridge(readConfig(OPTIONS))
+  await bridge.session(host)
+  // After /clear or a resume, several hooks ask for the new session at once; what one sets on it must stay.
+  session.id = 'new'
+  const [a, b, c] = await Promise.all([bridge.session(host), bridge.session(host), bridge.session(host)])
+  expect(a?.sessionId).toBe('new')
+  expect(b).toBe(a)
+  expect(c).toBe(a)
+  expect(bridge.peek()).toBe(a)
+  expect(ends).toEqual(['old'])
+})
+
 test("an agent's background shells and monitors never push it out, and end with it", { options: OPTIONS }, async ($, on) => {
   let n = 0
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: `s${++n}` } }))
   on('tool.call', { tool: 'Monitor' }, () => ({ result: { taskId: `m${++n}` } }))
   const { clock, ha, modelStep } = await withAgent($, on)
   for (let i = 0; i < 6; i++) await $.tool.call({ tool: 'Bash', command: 'sleep 99', run_in_background: true, agentId: 'a1', tool_use_id: `u${i}` })
-  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Monitor', command: 'tail -f log', description: 'Watch', agentId: 'a1', tool_use_id: `v${i}` })
+  for (let i = 0; i < 3; i++) await $.tool.call({ tool: 'Monitor', command: 'tail -f log', description: 'Watch', timeout_ms: 60_000, agentId: 'a1', tool_use_id: `v${i}` })
   await clock.advance(2_000)
   // Ten tasks for eight places: the oldest shells give way, not the agent.
   expect(taskIds(ha)).toEqual(['a1', 's3', 's4', 's5', 's6', 'm7', 'm8', 'm9'])

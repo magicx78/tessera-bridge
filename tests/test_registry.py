@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components"
 
 import pytest  # noqa: E402
 
-from registry import FORGET_AFTER, LIST_LIMIT, LOST_AFTER, NOTE_LIMIT, Registry  # noqa: E402
+from registry import FORGET_AFTER, LIMIT_KINDS, LIST_LIMIT, LOST_AFTER, NOTE_LIMIT, QUESTION_LIMIT, Registry  # noqa: E402
 
 
 def question(tool_use_id: str, nonce: str = "n1", multi: bool = False, parts: int = 1, labels=("Ja", "Nein")):
@@ -443,6 +443,69 @@ def test_a_long_task_list_is_read_only_so_far():
     ids = {t["id"] for t in r.background(100)}
     # The first 32 entries are read: dup (twice) and t0..t29; the newest 8 of them stay.
     assert ids == {f"t{i}" for i in range(22, 30)}
+
+
+def test_a_long_question_list_registers_at_most_eight():
+    """A report with thousands of questions registers QUESTION_LIMIT of them and answers for as many."""
+    r = Registry()
+    many = [question(f"toolu_{i}") for i in range(5000)]
+    reply = r.report(report("pc1", "a", 1, "A", "asking", many), now=0)
+    assert len(r.questions) == QUESTION_LIMIT
+    assert len(reply["questions"]) == QUESTION_LIMIT
+    assert r.snapshot(0)["open"] == QUESTION_LIMIT
+
+
+def test_settled_questions_a_session_no_longer_reports_are_kept_only_so_many():
+    """A bridge that asks new questions on every report does not grow the registry without end (until the prune)."""
+    r = Registry()
+    for seq in range(1, 41):
+        batch = [question(f"toolu_{seq}_{i}") for i in range(QUESTION_LIMIT)]
+        r.report(report("pc1", "a", seq, "A", "asking", batch), now=seq)
+    assert len(r.questions) <= 2 * QUESTION_LIMIT
+    # The questions of the last report are all open and known.
+    assert r.snapshot(41)["open"] == QUESTION_LIMIT
+
+
+def test_limits_are_read_only_so_far_and_carry_only_known_keys():
+    r = Registry()
+    junk = "x" * 100_000
+    limits = [{"kind": f"kind_{i}", "percent": i, "resets_at": "2099-01-01T00:00:00Z", "junk": junk} for i in range(5000)]
+    r.report(report("pc1", "a", 1, "A", "idle", limits=limits), now=0)
+    stored = r.limits["pc1"][1]
+    assert len(stored) == LIMIT_KINDS
+    assert all(set(limit) <= {"kind", "percent", "resets_at"} for limit in stored)
+    assert len(r.limits_summary(1)["kinds"]) == LIMIT_KINDS
+
+
+@pytest.mark.parametrize("percent", [float("inf"), float("nan"), 10**400, True, "44"])
+def test_a_limit_percent_that_is_no_finite_number_is_unknown(percent):
+    r = Registry()
+    r.report(report("pc1", "a", 1, "A", "idle", limits=[{"kind": "five_hour", "percent": percent}]), now=0)
+    assert r.limits_summary(1)["kinds"]["five_hour"]["percent"] is None
+
+
+def test_a_limit_kind_and_reset_are_cut_and_duplicate_kinds_count_once():
+    r = Registry()
+    limits = [{"kind": "k" * 500, "percent": 1, "resets_at": "r" * 500}, {"kind": "five_hour", "percent": 2}, {"kind": "five_hour", "percent": 3}]
+    r.report(report("pc1", "a", 1, "A", "idle", limits=limits), now=0)
+    kinds = r.limits_summary(1)["kinds"]
+    assert len(kinds) == 2 and kinds["five_hour"]["percent"] == 2
+    long_kind = next(k for k in kinds if k != "five_hour")
+    assert len(long_kind) <= 32 and len(kinds[long_kind]["resets_at"]) <= 40
+
+
+def test_a_lone_surrogate_in_a_text_is_dropped():
+    """JSON may carry an unpaired \\ud800; encoding it as UTF-8 raised (HTTP 500). A real pair stays whole."""
+    r = Registry()
+    q = question("toolu_1")
+    q["parts"][0]["text"] = "Weiter\ud800 machen? \U0001f600"
+    q["parts"][0]["options"][0]["label"] = "J\udfffa"
+    reply = r.report(report("pc1", "a", 1, "Gar\ud83dden", "asking", [q]), now=0)
+    assert reply["ok"] is True
+    part = r.question(reply["questions"]["toolu_1"]["handle"])["parts"][0]
+    assert part["text"] == "Weiter machen? \U0001f600" and part["lines"] == ["Weiter machen? \U0001f600"]
+    assert part["options"][0]["label"] == "Ja"
+    assert r.snapshot(0)["names"] == ["Garden"]
 
 
 if __name__ == "__main__":

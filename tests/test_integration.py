@@ -323,6 +323,34 @@ async def test_the_lists_that_change_with_every_report_stay_out_of_the_recorder(
     assert "rev" in hass.states.get("sensor.claude_sessions").state_info["unrecorded_attributes"]
 
 
+async def test_the_activity_times_stay_out_of_the_recorder_but_reach_the_screen(hass, hass_client):
+    """`last_active` moves with every report of a working session: thousands of recorder rows a day otherwise."""
+    await setup_entry(hass)
+    client = await hass_client()
+    await post_report(client, state="working")
+    await hass.async_block_till_done()
+    sessions = hass.states.get("sensor.claude_sessions")
+    moving = {"rev", "event_rev", "active_since", "last_active"}
+    assert moving <= sessions.state_info["unrecorded_attributes"]
+    # Unrecorded is not hidden: the live state the screen reads still carries them.
+    assert moving <= set(sessions.attributes)
+    assert sessions.attributes["last_active"] > 0 and sessions.attributes["active_since"] > 0
+
+
+async def test_a_lone_surrogate_in_a_report_is_no_server_error(hass, hass_client):
+    """Home Assistant's JSON (orjson) refuses an unpaired \\ud800 today (400); should it ever let one through, the
+    registry drops it (tests/test_registry.py) instead of failing with a 500."""
+    await setup_entry(hass)
+    client = await hass_client()
+    q = '{"id": "toolu_1", "nonce": "n1", "parts": [{"id": "p0", "text": "Weiter\\ud800?", "options": [{"id": "o0", "label": "Ja"}]}]}'
+    body = '{"instance": "pc1", "session": "a", "seq": 1, "name": "G\\udfffarden", "state": "asking", "questions": [' + q + "]}"
+    response = await client.post("/api/tessera_claude/v1/report", data=body, headers={"Content-Type": "application/json"})
+    assert response.status in (200, 400)
+    if response.status == 200:
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.claude_sessions").attributes["names"] == ["Garden"]
+
+
 # --- allowed users (stage 1) -------------------------------------------------------------------------------------
 
 
@@ -362,10 +390,43 @@ async def test_without_a_list_everyone_may_call(hass):
     assert await call_as(hass, "get_background", {}, other.id) == {"tasks": []}
 
 
-async def test_calls_without_a_user_stay_allowed(hass):
+async def test_reads_without_a_user_stay_allowed(hass):
     tessera = await make_user(hass, "Tessera Screen")
     await setup_entry(hass, {"allowed_users": [tessera.id]})
     assert await call_as(hass, "get_background", {}, None) == {"tasks": []}
+    assert (await call_as(hass, "get_overview", {}, None))["sessions"] == []
+
+
+@pytest.mark.parametrize(("service", "data"), [("answer", {"question": "q1", "answers": {}}), ("set_notify", {"mode": "tone"})])
+async def test_changes_without_a_user_are_refused_once_the_list_is_set(hass, service, data):
+    """An automation, a script or an ESPHome device action carries no user: once the list is set it may not answer a
+    question or change the options."""
+    tessera = await make_user(hass, "Tessera Screen")
+    entry = await setup_entry(hass, {"allowed_users": [tessera.id]})
+    with pytest.raises(Unauthorized):
+        await call_as(hass, service, data, None)
+    assert "notify" not in entry.options
+
+
+@pytest.mark.parametrize(("service", "data"), SERVICE_CALLS)
+async def test_without_a_list_calls_without_a_user_pass_everywhere(hass, service, data):
+    """Stage 1, the screen's way today: an empty list refuses nothing, with or without a user."""
+    await setup_entry(hass)
+    await call_as(hass, service, data, None)
+
+
+async def test_set_notify_without_a_user_changes_nothing_when_refused(hass, caplog):
+    tessera = await make_user(hass, "Tessera Screen")
+    entry = await setup_entry(hass, {"allowed_users": [tessera.id], "notify": "speech"})
+    caplog.set_level(logging.INFO, logger="custom_components.tessera_claude")
+    for _ in range(2):
+        with pytest.raises(Unauthorized):
+            await call_as(hass, "set_notify", {"mode": "none"}, None)
+    assert entry.options["notify"] == "speech"
+    # The listed user and an admin still may.
+    assert await call_as(hass, "set_notify", {"mode": "tone"}, tessera.id) == {"notify": "tone"}
+    refused = [r for r in caplog.records if "without a user" in r.getMessage() and r.levelno == logging.WARNING]
+    assert len(refused) == 1
 
 
 async def test_admins_pass_even_when_not_listed(hass):

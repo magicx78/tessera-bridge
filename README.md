@@ -4,8 +4,8 @@
 
 **Alle laufenden Claude-Code-Sessions auf den Tessera-Touchscreens in Home Assistant – und Claudes Fragen direkt am Screen beantworten.**
 
-![Mod](https://img.shields.io/badge/Mod-0.2.10-7c3aed)
-![Integration](https://img.shields.io/badge/Integration-0.2.8-41bdf5)
+![Mod](https://img.shields.io/badge/Mod-0.2.11-7c3aed)
+![Integration](https://img.shields.io/badge/Integration-0.2.9-41bdf5)
 ![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.11-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
 ![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
@@ -91,7 +91,9 @@ Alle Felder im Formular sind optional:
 
 Später lässt sich das alles unter **Optionen** ändern.
 
-Unter **Optionen** gibt es ab Integration 0.2.8 außerdem **Erlaubte Nutzer** (`allowed_users`). Bleibt die Liste leer, darf jeder HA-Nutzer die Dienste und die HTTP-API aufrufen, wie bisher. Steht dort jemand, dürfen nur diese Nutzer und Administratoren. Aufrufe ohne Nutzer (Automationen, Skripte, Geräte-Aktionen) bleiben vorerst erlaubt. Jeder Aufrufer wird einmal ins Log geschrieben („Caller of tessera_claude: …“), so lassen sich die Nutzer des Screens und des Mods ablesen, bevor man die Liste füllt. Wer abgewiesen wird, steht einmal als Warnung im Log.
+Unter **Optionen** gibt es ab Integration 0.2.8 außerdem **Erlaubte Nutzer** (`allowed_users`). Bleibt die Liste leer, darf jeder HA-Nutzer die Dienste und die HTTP-API aufrufen, wie bisher. Steht dort jemand, dürfen nur diese Nutzer und Administratoren. Aufrufe ohne Nutzer (Automationen, Skripte, Geräte-Aktionen) dürfen dann ab Integration 0.2.9 nur noch lesen: `answer` und `set_notify` werden abgewiesen. Bei leerer Liste ändert sich nichts. Jeder Aufrufer wird einmal ins Log geschrieben („Caller of tessera_claude: …“), so lassen sich die Nutzer des Screens und des Mods ablesen, bevor man die Liste füllt. Steht für die Antworten des Screens dort nur „Call without a user“, würde eine gefüllte Liste sie abweisen. Wer abgewiesen wird, steht einmal als Warnung im Log.
+
+Ab Integration 0.2.9 schreibt der Recorder `last_active`, `active_since` und `event_rev` von `sensor.claude_sessions` nicht mehr mit (der Screen liest sie weiter live). Eine Meldung des Mods trägt höchstens acht Fragen und acht Limit-Fenster.
 
 Danach in deinem Home-Assistant-Profil unter **Sicherheit** ein langlebiges Zugriffstoken für den Mod anlegen.
 
@@ -115,7 +117,7 @@ Danach die Optionen setzen, unter `/plugin` → Installed → tessera-bridge:
 | `permissionHints` | `on`: wartende Freigaben werden am Screen als Hinweis gezeigt | `on` |
 | `hintDelay` | So viele Sekunden muss eine Freigabe-Anfrage am PC offen sein, bevor der Hinweis kommt. | `8` |
 
-In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden. Den Fortschritt eines Agents melden nur Sessions ab Mod 0.2.4; er kommt aus den Schritt-Werkzeugen `mcp__clawd-hq__step` und `mcp__savvy-progress__step`, die der Agent in seiner Schleife aufruft. Ab Mod 0.2.5 liest der Mod sie aus der Antwort des Modells, denn mit Mod 0.2.4 kamen sie in einer echten Session nie an. Er zählt außerdem die übrigen Werkzeug-Aufrufe eines Agents (`bg_calls` ab Integration 0.2.6), auch wenn der Agent keine Schritte meldet. Ab Mod 0.2.9 bewegt ein Schritt den Balken erst, wenn das Schritt-Werkzeug ihn angenommen hat; einen abgelehnten Schritt (etwa eine Notiz über 80 Zeichen) zeigt der Balken nicht mehr. Ab Mod 0.2.10 ändert sich für die Anzeige nichts: nur die Typsicherheit des Codes und ein stabiler Test.
+In offenen Sessions danach `/reload-plugins` ausführen oder neue Sessions starten. Hintergrund-Aufgaben melden nur Sessions, die mit Mod 0.2.2 oder neuer gestartet wurden. Den Fortschritt eines Agents melden nur Sessions ab Mod 0.2.4; er kommt aus den Schritt-Werkzeugen `mcp__clawd-hq__step` und `mcp__savvy-progress__step`, die der Agent in seiner Schleife aufruft. Ab Mod 0.2.5 liest der Mod sie aus der Antwort des Modells, denn mit Mod 0.2.4 kamen sie in einer echten Session nie an. Er zählt außerdem die übrigen Werkzeug-Aufrufe eines Agents (`bg_calls` ab Integration 0.2.6), auch wenn der Agent keine Schritte meldet. Ab Mod 0.2.9 bewegt ein Schritt den Balken erst, wenn das Schritt-Werkzeug ihn angenommen hat; einen abgelehnten Schritt (etwa eine Notiz über 80 Zeichen) zeigt der Balken nicht mehr. Ab Mod 0.2.10 ändert sich für die Anzeige nichts: nur die Typsicherheit des Codes und ein stabiler Test. Ab Mod 0.2.11 geht eine Änderung, die kommt, während ein Bericht unterwegs ist, beim nächsten Takt hinaus statt erst mit dem Herzschlag, und ein langsames Home Assistant bekommt keinen Stapel Berichte mehr. Ein Schritt über den Plan hinaus, den Clawd HQ annimmt, füllt den Balken ganz, und lange Titel werden nie mitten in einem Emoji gekürzt. Ein Agent, der auf seine eigene Hintergrund-Arbeit wartet, bleibt samt seinen Shells in der Liste, auch wenn der nächste Stop der Haupt-Session oder die Agent-Liste ihn nicht mehr nennt.
 
 Willst du nur für eine Session einen Checkout laden, geht das mit `claude --plugin-dir /pfad/zu/tessera-bridge`.
 

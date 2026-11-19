@@ -27,7 +27,7 @@
           "language": "Speech language",
           "notify": "Announce a question or hint",
           "hints": "Announce permission prompts",
-          "allowed_users": "Users allowed to call the services and the API (empty: everyone; administrators and calls without a user always pass)"
+          "allowed_users": "Users allowed to call the services and the API (empty: everyone; administrators always pass; calls without a user, such as automations, may then only read, never answer or change the announcement)"
         }
       }
     }

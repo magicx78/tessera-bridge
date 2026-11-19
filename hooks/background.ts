@@ -20,9 +20,10 @@ const NOTE_MAX = 80
 export const PROGRESS_MAX = 10_000
 export const CALLS_MAX = 1_000_000
 
+/** The text as one line of at most `limit` characters, counted and cut in whole code points (never inside an emoji). */
 function oneLine(text: string, limit = TITLE_MAX): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim())
+  return chars.length > limit ? `${chars.slice(0, limit - 1).join('')}…` : chars.join('')
 }
 
 const LEADING_CD = /^\s*(?:cd|pushd)\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)(?:\s*(?:&&|;)\s*|\s*$)/
@@ -180,7 +181,8 @@ function clawdRefuses(total: number, note: string | undefined): boolean {
 
 /**
  * The progress a step call reports, or null for another tool, a report that makes no sense (it would draw a wrong
- * bar), or one its step tool refuses as the tool's own rules say. A long note the tool takes is cut for the screen.
+ * bar), or one its step tool refuses as the tool's own rules say. A long note the tool takes is cut for the screen;
+ * a step past the plan Clawd HQ's tool takes, as it does, as the plan done.
  */
 export function progressReport(tool: string, input: unknown): Progress | null {
   if (!PROGRESS_TOOLS.has(tool)) return null
@@ -190,7 +192,7 @@ export function progressReport(tool: string, input: unknown): Progress | null {
   // Both tools refuse a note that is no text: Clawd HQ's in its answer, savvy-progress by the schema it registers.
   if (i.note !== undefined && typeof i.note !== 'string') return null
   if (tool === CLAWD_STEP && clawdRefuses(i.total, i.note)) return null
-  const done = Math.min(i.done, PROGRESS_MAX)
+  const done = Math.min(tool === CLAWD_STEP ? Math.min(i.done, i.total) : i.done, PROGRESS_MAX)
   const total = Math.min(i.total, PROGRESS_MAX)
   if (total < 1 || done < 0 || done > total) return null
   const note = typeof i.note === 'string' ? oneLine(i.note.replace(UNSEEN, ' '), NOTE_MAX) : ''

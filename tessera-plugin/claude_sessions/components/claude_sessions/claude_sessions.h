@@ -151,14 +151,14 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   int open_count() const;
 
  protected:
-  void handle_event(const std::string &event);
+  void handle_event(const tessera::Text &event);
   // Sends the request of `pending_event_` (a question for the popup, a hint); on_interval repeats it while no reply came.
   void send_event_request();
   void show_popup_now();
   // A popup switch changed (on the glass or in Home Assistant): off closes a popup of its kind and drops a request
   // still out, on shows what waits now.
   void popup_switch_changed(bool question, bool on);
-  void remember_event(const std::string &event);
+  void remember_event(const tessera::Text &event);
   tessera::BarItem bar() const;
   uint32_t ask(const char *service, JsonDocument &data);
 
@@ -180,7 +180,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   char pending_question_[12] = "";
   tessera::Text seen_event_, seen_event_rev_, seen_rev_;
   // The newest event of each kind, so switching a popup on finds its own even after a later event of the other kind.
-  std::string last_question_event_, last_hint_event_;
+  tessera::Text last_question_event_, last_hint_event_;
   bool event_seen_ = false, event_rev_seen_ = false;
   // When the event was last handled, by the screen's clock: the event and its counter arrive as two values, and the
   // second of a pair is no second event.
@@ -197,7 +197,7 @@ class ClaudeSessions : public Component, public tessera::Plugin {
   bool question_for_popup_ = false;
   // The event whose request the app has not answered yet (a request sent while the screen still waited for the app,
   // or a reply lost on the way, is repeated by on_interval), when it was sent last, and how often.
-  std::string pending_event_;
+  tessera::Text pending_event_;
   uint32_t pending_sent_ms_ = 0;
   uint8_t pending_tries_ = 0;
 };

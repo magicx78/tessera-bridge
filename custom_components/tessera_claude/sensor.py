@@ -140,8 +140,9 @@ class SessionsSensor(ClaudeSensor):
 
     _attr_icon = "mdi:robot"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    # The registry's revision moves with every report: nothing worth a row in the recorder.
-    _unrecorded_attributes = frozenset({"rev"})
+    # The registry's revision moves with every report, and so does `last_active` while a session works (`active_since`
+    # and `event_rev` with every activity and event): nothing worth a row in the recorder. The live state keeps them.
+    _unrecorded_attributes = frozenset({"rev", "event_rev", "active_since", "last_active"})
 
     def __init__(self, registry: Registry, announcer: Announcer) -> None:
         super().__init__(registry, "claude_sessions", "Claude Sessions")

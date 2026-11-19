@@ -42,6 +42,15 @@ TASK_READ_LIMIT = TASK_LIMIT * 4
 AGE_LIMIT = 24 * 3600
 PROGRESS_LIMIT = 10_000
 CALLS_LIMIT = 1_000_000
+# How many questions a session's report registers (an AskUserQuestion call is one; the mod lists the open ones), and
+# how many settled ones it no longer lists stay known until the prune.
+QUESTION_LIMIT = 8
+QUESTION_READ_LIMIT = QUESTION_LIMIT * 4
+# How many limit windows (kinds) a reading keeps, how far its list is read, and the longest kind and reset text.
+LIMIT_KINDS = 8
+LIMIT_READ_LIMIT = LIMIT_KINDS * 4
+KIND_LIMIT = 32
+RESET_LIMIT = 40
 
 STATE_ORDER = {"asking": 0, "permission": 1, "working": 2, "idle": 3, "lost": 4, "ended": 5}
 # The states in which a session does something or waits for the person: what the activity tile counts.
@@ -147,10 +156,12 @@ def wrap_lines(text: str, max_bytes: int = LINE_BYTES, max_lines: int = LINE_LIM
 
 
 def _text(value: Any, limit: int | None = None) -> str:
+    """A text as reported, cut to `limit` characters; anything else is "". A lone surrogate (JSON may carry an
+    unpaired \\ud800) is dropped: UTF-8 cannot encode it, and the line breaking and the state writer encode every text."""
     text = value if isinstance(value, str) else ""
     if limit is not None and len(text) > limit:
         text = text[: limit - 1] + "…"
-    return text
+    return text.encode("utf-8", "ignore").decode("utf-8")
 
 
 def _count(value: Any, limit: int) -> int | None:
@@ -175,6 +186,38 @@ def _progress(raw: dict[str, Any]) -> tuple[int | None, int | None]:
     if done is None or total is None or total < 1 or not 0 <= done <= total:
         return None, None
     return done, total
+
+
+def _percent(value: Any) -> float | None:
+    """A limit's percent when it is a finite number (no bool), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:  # an int past any float
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _clean_limits(limits: list) -> list[dict[str, Any]]:
+    """A reading's limit windows: kind, percent and reset, each kind once, at most LIMIT_KINDS of the first
+    LIMIT_READ_LIMIT entries."""
+    clean: dict[str, dict[str, Any]] = {}
+    for raw in limits[:LIMIT_READ_LIMIT]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("kind"), str):
+            continue
+        kind = _text(raw["kind"], KIND_LIMIT)
+        if not kind or kind in clean:
+            continue
+        resets_at = raw.get("resets_at")
+        clean[kind] = {
+            "kind": kind,
+            "percent": _percent(raw.get("percent")),
+            "resets_at": _text(resets_at, RESET_LIMIT) if isinstance(resets_at, str) else None,
+        }
+        if len(clean) == LIMIT_KINDS:
+            break
+    return list(clean.values())
 
 
 def _parts_of(raw: Any) -> list[dict[str, Any]]:
@@ -334,13 +377,22 @@ class Registry:
             )
         session.tasks = tasks[-TASK_LIMIT:]
 
-    def _sync_questions(self, session: Session, body: dict[str, Any], now: float) -> None:
+    @staticmethod
+    def _reported_questions(body: dict[str, Any]) -> list[dict[str, Any]]:
+        """The report's questions this registry looks at: the first QUESTION_LIMIT with an id, each id once, from the
+        first QUESTION_READ_LIMIT entries."""
         reported = body.get("questions")
-        reported = reported if isinstance(reported, list) else []
+        items: dict[str, dict[str, Any]] = {}
+        for item in reported[:QUESTION_READ_LIMIT] if isinstance(reported, list) else []:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"] not in items:
+                items[item["id"]] = item
+                if len(items) == QUESTION_LIMIT:
+                    break
+        return list(items.values())
+
+    def _sync_questions(self, session: Session, body: dict[str, Any], now: float) -> None:
         seen: set[str] = set()
-        for item in reported:
-            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-                continue
+        for item in self._reported_questions(body):
             tool_use_id = item["id"]
             nonce = _text(item.get("nonce"))
             key = f"{session.key}|{tool_use_id}"
@@ -372,14 +424,24 @@ class Registry:
         for question in list(self.questions.values()):
             if question.session_key == session.key and question.key not in seen and question.status == "open":
                 self._cancel(question)
+        self._forget_unlisted(session, seen)
+
+    def _forget_unlisted(self, session: Session, listed: set[str]) -> None:
+        """Of the session's settled questions its bridge no longer lists, the newest QUESTION_LIMIT stay (a late claim
+        still finds them); older ones go before the prune would take them."""
+        unlisted = sorted(
+            (q for q in self.questions.values() if q.session_key == session.key and q.key not in listed and q.status != "open"),
+            key=lambda q: q.created,
+            reverse=True,
+        )
+        for question in unlisted[QUESTION_LIMIT:]:
+            del self.questions[question.key]
 
     def _statuses(self, session: Session, body: dict[str, Any]) -> dict[str, Any]:
         statuses: dict[str, Any] = {}
-        reported = body.get("questions")
-        for item in reported if isinstance(reported, list) else []:
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                question = self.questions.get(f"{session.key}|{item['id']}")
-                statuses[item["id"]] = question.status_reply() if question else {"status": "unknown"}
+        for item in self._reported_questions(body):
+            question = self.questions.get(f"{session.key}|{item['id']}")
+            statuses[item["id"]] = question.status_reply() if question else {"status": "unknown"}
         return statuses
 
     def _cancel(self, question: Question) -> None:
@@ -569,8 +631,9 @@ class Registry:
     def _take_limits(self, instance: str, limits: list, age: Any, now: float) -> None:
         """A session's reading of the account's limits. Every session repeats its own reading on every heartbeat,
         an idle one for hours: the reading measured last stands (`limits_age`: seconds since the session measured
-        it), and a session without a reading (an empty list) takes nothing away."""
-        clean = [l for l in limits if isinstance(l, dict) and isinstance(l.get("kind"), str)]
+        it), and a session without a reading (an empty list) takes nothing away. Only the first LIMIT_READ_LIMIT entries
+        are read and LIMIT_KINDS kinds kept, each kind once, with only the keys the summary uses."""
+        clean = _clean_limits(limits)
         if not clean:
             return
         measured = now - age if isinstance(age, (int, float)) and not isinstance(age, bool) and age >= 0 else now

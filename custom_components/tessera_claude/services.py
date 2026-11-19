@@ -2,7 +2,8 @@
 
 The Tessera plugin asks them through `tessera::send` (`call_service:tessera_claude.<service>`); the Tessera app
 calls them with `return_response` and hands the plugin the answer. Who else may call them is the option
-`allowed_users` (access.py): empty, everyone; set, the listed users and administrators; calls without a user pass.
+`allowed_users` (access.py): empty, everyone; set, the listed users and administrators, and calls without a user
+(automations, scripts, device actions) only for the reads: never `answer` or `set_notify`.
 """
 from __future__ import annotations
 
@@ -49,9 +50,12 @@ NOTIFY_SCHEMA = vol.Schema({vol.Required("mode"): vol.In(NOTIFY_MODES)})
 async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
     registry = entry.runtime_data.registry
 
-    def guarded(handler):
+    def guarded(handler, changes: bool = False):
+        """`changes`: the service answers a question or rewrites the options (access.py refuses it without a user once
+        allowed_users is set)."""
+
         async def wrapper(call: ServiceCall) -> ServiceResponse:
-            if not await async_is_allowed(hass, entry, call.context.user_id):
+            if not await async_is_allowed(hass, entry, call.context.user_id, changes=changes):
                 raise Unauthorized(context=call.context, permission=DOMAIN)
             return await handler(call)
 
@@ -86,11 +90,11 @@ async def async_setup_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
     hass.services.async_register(DOMAIN, SERVICE_HINT, guarded(hint), schema=HINT_SCHEMA, supports_response=SupportsResponse.ONLY)
     hass.services.async_register(
-        DOMAIN, SERVICE_ANSWER, guarded(answer), schema=ANSWER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+        DOMAIN, SERVICE_ANSWER, guarded(answer, changes=True), schema=ANSWER_SCHEMA, supports_response=SupportsResponse.OPTIONAL
     )
     hass.services.async_register(DOMAIN, SERVICE_BACKGROUND, guarded(background), supports_response=SupportsResponse.ONLY)
     hass.services.async_register(
-        DOMAIN, SERVICE_NOTIFY, guarded(set_notify), schema=NOTIFY_SCHEMA, supports_response=SupportsResponse.OPTIONAL
+        DOMAIN, SERVICE_NOTIFY, guarded(set_notify, changes=True), schema=NOTIFY_SCHEMA, supports_response=SupportsResponse.OPTIONAL
     )
 
 

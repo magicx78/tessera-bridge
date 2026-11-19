@@ -1449,14 +1449,16 @@ static Tone age_tone(const BackgroundRow &row, uint32_t epoch) {
 static bool has_progress(const BackgroundRow &row) { return row.total > 0 && row.done >= 0 && row.done <= row.total; }
 
 // How far a task is, in thousandths: the bar FILLS. By the steps it reported (done / total), else by its age against
-// eight hours (0.1.12: it used to show what was left). Never less than a sliver while it runs.
+// eight hours (0.1.12: it used to show what was left), but that age fill stops at 75 %: a task without steps never
+// looks finished, however long it hangs. Never less than a sliver while it runs.
 static int progress_share_pm(const BackgroundRow &row, uint32_t epoch) {
   static constexpr uint32_t AGE_SPAN = 8 * 3600;
+  static constexpr int AGE_CAP_PM = 750;
   int pm = 0;
   if (has_progress(row)) {
     pm = row.done * 1000 / row.total;
   } else if (row.at && epoch >= row.at) {
-    pm = static_cast<int>(std::min<uint32_t>(epoch - row.at, AGE_SPAN) * 1000 / AGE_SPAN);
+    pm = static_cast<int>(std::min<uint32_t>(epoch - row.at, AGE_SPAN) * AGE_CAP_PM / AGE_SPAN);
   }
   return std::max(60, std::min(1000, pm));
 }
@@ -2647,10 +2649,10 @@ void ClaudeSessions::show_popup_now() {
   tessera::show_popup(this, [this]() { return new AskPopup(this); }, tessera::PopupWidth::ALERT);
 }
 
-void ClaudeSessions::handle_event(const std::string &event) {
+void ClaudeSessions::handle_event(const tessera::Text &event) {
   const size_t colon = event.find(':');
-  if (colon == std::string::npos) return;
-  const std::string kind = event.substr(0, colon), handle = event.substr(colon + 1);
+  if (colon == tessera::Text::npos) return;
+  const tessera::Text kind = event.substr(0, colon), handle = event.substr(colon + 1);
   if (handle.empty()) return;
   if (kind == "question") {
     if (!question_popup_ || !question_popup_->state) return;
@@ -2664,7 +2666,7 @@ void ClaudeSessions::handle_event(const std::string &event) {
   send_event_request();
 }
 
-void ClaudeSessions::remember_event(const std::string &event) {
+void ClaudeSessions::remember_event(const tessera::Text &event) {
   if (event.rfind("question:", 0) == 0) last_question_event_ = event;
   else if (event.rfind("hint:", 0) == 0) last_hint_event_ = event;
 }
@@ -2687,7 +2689,7 @@ void ClaudeSessions::popup_switch_changed(bool question, bool on) {
   // On: the newest event of this kind is asked again; the registry's reply decides (an open question, a hint that
   // still waits).
   if (!event_seen_) return;
-  const std::string &event = question ? last_question_event_ : last_hint_event_;
+  const tessera::Text &event = question ? last_question_event_ : last_hint_event_;
   if (event.empty()) return;
   if (question && open_count() <= 0) return;
   event_handled_ms_ = millis();
@@ -2715,7 +2717,7 @@ void ClaudeSessions::request_notify(const char *mode) {
 
 void ClaudeSessions::send_event_request() {
   const size_t colon = pending_event_.find(':');
-  const std::string kind = pending_event_.substr(0, colon), handle = pending_event_.substr(colon + 1);
+  const tessera::Text kind = pending_event_.substr(0, colon), handle = pending_event_.substr(colon + 1);
   pending_sent_ms_ = millis();
   pending_tries_ += 1;
   ESP_LOGD(TAG, "Event %s: request %u", pending_event_.c_str(), (unsigned) pending_tries_);
@@ -2745,7 +2747,7 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
   bool fresh = false;
   if (event_ && event_->has_state() && !roomy::same(event_->state, seen_event_)) {
     seen_event_ = roomy::text(event_->state);
-    remember_event(roomy::plain(seen_event_));
+    remember_event(seen_event_);
     event_seen_ = true;
     // The first value after a start is handled too: a question asked while the screen was off or away is still
     // open, and the registry's reply decides (a popup only for an open question, for a hint still waiting).
@@ -2761,7 +2763,7 @@ void ClaudeSessions::on_interval(uint32_t now_ms) {
   }
   if (fresh && event_seen_) {
     event_handled_ms_ = now_ms;
-    handle_event(roomy::plain(seen_event_));
+    handle_event(seen_event_);
   }
   // A request the app did not answer (sent while the screen still waited for the app after a start, or lost with
   // the connection) is sent again, a few times, so a question open at that moment still gets its popup.
