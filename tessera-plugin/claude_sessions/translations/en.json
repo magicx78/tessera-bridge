@@ -110,6 +110,8 @@
     "window_both": "Both",
     "window_five": "5 hours",
     "window_week": "Week",
+    "opt_instrument": "Instrument look",
+    "opt_instrument_hint": "A dark face in the light and the dark look, like a gauge: the words, bars and animation glow on it. Off: the tile follows the screen's look.",
     "card_background": "Claude in the background"
   }
 }

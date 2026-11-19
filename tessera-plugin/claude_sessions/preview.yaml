@@ -57,6 +57,37 @@ tiles:
     entity: sensor.claude_sessions_work
     options: { motion: none }
     sizes: [1x1, 2x1]
+  # 0.1.13: the whole page, and the instrument's face (dark in both looks). The bench shows every example of a tile
+  # that offers the whole page there too, so no `full` in `sizes`.
+  - tile: activity
+    name: Whole page
+    entity: sensor.claude_sessions_busy
+    sizes: [2x3]
+  - tile: activity
+    name: Instrument
+    entity: sensor.claude_sessions_busy
+    options: { instrument: true }
+    sizes: [1x1, 2x1, 2x2, 2x3]
+  - tile: activity
+    name: Instrument waits
+    entity: sensor.claude_sessions_perm
+    options: { instrument: true, motion: chomper }
+    sizes: [2x1]
+  - tile: activity
+    name: Instrument asks
+    entity: sensor.claude_sessions
+    options: { instrument: true }
+    sizes: [2x2]
+  - tile: activity
+    name: Instrument rests
+    entity: sensor.claude_sessions_empty
+    options: { instrument: true, motion: spark }
+    sizes: [1x1, 2x1]
+  - tile: activity
+    name: Instrument spark
+    entity: sensor.claude_sessions_busy
+    options: { instrument: true, motion: spark }
+    sizes: [2x2]
   - tile: limits
     entity: sensor.claude_sessions
     sizes: [1x1, 2x1, 2x2, 3x2]
@@ -84,6 +115,16 @@ tiles:
     name: Nothing
     entity: sensor.claude_background_empty
     sizes: [1x1, 2x1]
+  - tile: background
+    name: Instrument tasks
+    entity: sensor.claude_background
+    options: { instrument: true }
+    sizes: [1x1, 2x1, 2x2]
+  - tile: background
+    name: Instrument idle
+    entity: sensor.claude_background_empty
+    options: { instrument: true }
+    sizes: [2x1]
 
 states:
   sensor.claude_background:
@@ -157,6 +198,28 @@ states:
       lwk_at: "{epoch+1d}"
       lx_names: [fable]
       lx: [64]
+  # Five sessions, two of them at work: what the whole page lists.
+  sensor.claude_sessions_busy:
+    state: "5"
+    attributes:
+      rev: 9
+      event: ""
+      open: 0
+      h: [sab3, sab1, sab5, sab8, sab9]
+      names: [tessera-bridge, garden-irrigation, homelab-docs, openclaw, solar-expansion]
+      states: [work, work, idle, idle, lost]
+      ctx: [37, 12, 62, 5, 80]
+      asks: [0, 0, 0, 0, 0]
+      q: ["", "", "", "", ""]
+      active: 2
+      active_since: "{epoch-12m}"
+      last_active: "{epoch}"
+      l5h: 44
+      l5h_at: "{epoch+1h}"
+      lwk: 12
+      lwk_at: "{epoch+3d}"
+      lx_names: []
+      lx: []
   sensor.claude_sessions_perm:
     state: "2"
     attributes:

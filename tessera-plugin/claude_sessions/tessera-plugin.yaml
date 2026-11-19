@@ -4,9 +4,11 @@
 # tessera-bridge mod in each session. No code and no words here: every name, label and hint is a key into
 # translations/<language>.json, part "app" (docs/MANIFEST.md of the plugins repository).
 id: claude_sessions
-version: 0.1.12
+version: 0.1.13
+# 0.28: a card that is an instrument's face (CardColor::INSTRUMENT, the option "instrument"); 0.27: the instrument
+# roles (theme::INSTRUMENT...); 0.25: a tile over the whole page (`full` beside `min` and `max`, TileContext::full);
 # 0.18: a popup for a new question (show_popup); 0.12: a card's on_tap and tap_point; 0.10: ui::text and PSRAM.
-api: "0.18"
+api: "0.28"
 icon: robot
 maintainer: magicx78
 license: MIT
@@ -52,10 +54,13 @@ tiles:
   - id: activity
     name: tile_activity_name
     icon: robot
-    sizes: { min: 1x1, max: 2x3 }
-    # The words and numbers (about 1400), and the parts of the busiest motion in the tallest room: the mosaic's 56
-    # stones (7 x 8, at 80 each; the muncher's 6 lanes need 48 parts, the spark's 2 sparks 50).
-    memory: 5900
+    # The whole page too (0.1.13): there the words are larger, every session is listed with its context, the limits
+    # stand at the foot and the motion fills the right half.
+    sizes: { min: 1x1, max: 2x3, full: true }
+    # The words and numbers (about 1500, with the whole page's line of limits), and the parts of the busiest motion in
+    # the tallest room: the mosaic's 56 stones (7 x 8, at 80 each; the muncher's 2 lanes need 16 parts, the spark's 2
+    # sparks 50).
+    memory: 6000
     domains: [sensor]
     has_attributes: [h, states]
     attributes: [rev, event, open, h, names, states, ctx, asks, q, l5h, l5h_at, lwk, lwk_at, active, active_since,
@@ -68,6 +73,8 @@ tiles:
       - { id: motion, kind: choice, label: opt_motion, hint: opt_motion_hint, default: mosaic,
           choices: [{ value: mosaic, label: motion_mosaic }, { value: chomper, label: motion_chomper },
                     { value: spark, label: motion_spark }, { value: none, label: motion_none }] }
+      # An instrument's face: the card dark in the light and the dark look, the words and the motion in its roles.
+      - { id: instrument, kind: toggle, default: false, label: opt_instrument, hint: opt_instrument_hint }
   # The account's limits: five hours and the week as bars, each with a mark where an even pace would stand and when
   # it starts anew; any window of one model the sessions report (lx_names, lx) comes as a further bar. Same sensor.
   # With the option "window" one window alone, drawn as Tessera's meter tile: the percent large, the reset in the
@@ -92,14 +99,17 @@ tiles:
   - id: background
     name: tile_background_name
     icon: progress-clock
-    sizes: { min: 1x1, max: 3x3 }
-    # The words of ten rows and a bar of two blocks for each.
-    memory: 3000
+    # The whole page too (0.1.13): there each task has a second line (its session, its steps) and a thicker bar.
+    sizes: { min: 1x1, max: 3x3, full: true }
+    # The words of ten rows, a bar of two blocks for each, and the whole page's second line of each.
+    memory: 4000
     domains: [sensor]
     has_attributes: [bg_titles]
     attributes: [bg_titles, bg_kinds, bg_sess, bg_at, bg_hm, bg_done, bg_total, bg_calls]
     example: tile_background_example
     preview: { title: "{name}", value: "{state}" }
+    options:
+      - { id: instrument, kind: toggle, default: false, label: opt_instrument, hint: opt_instrument_hint }
 
 cards:
   - { id: sessions, name: card_sessions }

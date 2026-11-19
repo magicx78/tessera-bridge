@@ -6,7 +6,7 @@
 
 ![Mod](https://img.shields.io/badge/Mod-0.2.11-7c3aed)
 ![Integration](https://img.shields.io/badge/Integration-0.2.9-41bdf5)
-![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.11-f59e0b)
+![Tessera--Plugin](https://img.shields.io/badge/Tessera--Plugin-0.1.13-f59e0b)
 ![HACS](https://img.shields.io/badge/HACS-Custom-41bdf5)
 ![Lizenz](https://img.shields.io/badge/Lizenz-MIT-green)
 
@@ -60,9 +60,9 @@ Mehrere Sessions dürfen gleichzeitig fragen, auch von verschiedenen Rechnern. G
 | Kachel | Größen | Zeigt |
 |---|---|---|
 | **Claude-Sessions** | 1×1 bis 3×3 | Die Sessions mit ihrem Zustand und die offenen Fragen als Badge. Ab zwei Zeilen Höhe stehen die Limits in der letzten Zeile. Ein Tipp öffnet die Sessions-Karte. |
-| **Claude aktiv** | 1×1 bis 2×2 | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. Option „Animation“: Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine. Auf einer breiten Kachel nimmt die Animation die rechte Hälfte. |
+| **Claude aktiv** | 1×1 bis 2×3, ganze Seite | Ob Claude arbeitet, seit wann und in wie vielen Sessions. Wartet eine Frage, ist die Kachel rot; ein Tipp öffnet die Frage. Option „Animation“: Mosaik bauen, Mosaik-Fresser, Claude-Funke oder keine. Auf einer breiten Kachel nimmt die Animation die rechte Hälfte. Als ganze Seite (ab Plugin 0.1.13, braucht Tessera 0.4.98) größere Schrift, alle Sessions mit Kontext und die Limits in der letzten Zeile. Option „Instrument-Look“: dunkler Grund in hellem und dunklem Look. |
 | **Claude-Limits** | 1×1 bis 3×2 | 5-Stunden- und Wochenlimit als Balken, mit Tempo-Marke (wo ein gleichmäßiger Verbrauch stünde) und Reset. Meldet Claude Code ein Modellfenster (z. B. Fable), kommt es als eigener Balken dazu. Option „Fenster“: beide, 5 Stunden oder Woche. Ein einzelnes Fenster sieht aus wie eine native Meter-Kachel, mit Reset-Countdown oben rechts. So ersetzen zwei 1×1-Kacheln die beiden nativen Kacheln samt „Reset in“. |
-| **Claude im Hintergrund** | 1×1 bis 3×3 | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Unter jeder Aufgabe ein Balken: kürzer, je mehr erledigt ist (Schritte aus dem Agent), sonst kürzer, je älter sie ist. Farbe nach Alter: Akzent, ab 1 Stunde gelb, ab 4 Stunden rot. Ein Tipp öffnet die Karte „Claude im Hintergrund“ mit „Schritt a von b · Notiz“ oder „kein Fortschritt gemeldet“. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. |
+| **Claude im Hintergrund** | 1×1 bis 3×3, ganze Seite | Was im Hintergrund läuft (Shell, Agent, Monitor, Workflow), das Neueste zuerst, jeweils mit Startzeit und ab zwei Spalten mit Laufzeit. Unter jeder Aufgabe ein Balken, der sich füllt: nach den Schritten aus dem Agent, sonst nach dem Alter (höchstens zu drei Vierteln). Farbe nach Alter: Akzent, ab 1 Stunde gelb, ab 4 Stunden rot. Ein Tipp öffnet die Karte „Claude im Hintergrund“ mit „Schritt a von b · Notiz“ oder „kein Fortschritt gemeldet“. Auf 1×1 nur die Anzahl und „seit“ der ältesten Aufgabe. Als ganze Seite (ab Plugin 0.1.13) je Aufgabe eine zweite Zeile mit Session und Schritten. Option „Instrument-Look“ wie bei „Claude aktiv“. |
 
 Dazu kommen:
 

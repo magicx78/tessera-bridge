@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.13
+- The tiles "Claude active" and "Claude in the background" can be the whole page: pick the size "Whole page" in the layout editor. On a grid of three by three cells or more the page is laid out anew, not stretched: "Claude active" writes the number, the time and the title larger, lists every session (not only the active ones) with its context fill and state, puts the account's limits on the last line, and gives the animation the whole right half; "Claude in the background" writes each task larger, with a second line (its session and "Step 2 of 3" or "5 actions") and a thicker bar. On a smaller grid the whole page looks like a tile of those cells. The smaller sizes stay as they were.
+- A new option "Instrument look" on both tiles, off at first: the card is dark in the light and the dark look, like a gauge, and the words, bars and animation are drawn in the instrument's colours (the working colour is its green glow; amber for an approval and the red ground for a question stay). Nothing changes while it is off.
+- Needs plugin API 0.28 (Tessera 0.4.98, firmware 0.61.0, or newer): update the screen's firmware first. The tiles keep their places; nothing to re-add.
+
 ## 0.1.12
 - The bar under a background task now FILLS as the task goes: at "Step 1 of 3" it is one third full (before it showed what was left, two thirds). Without steps it fills with the task's age over eight hours (before it shrank). Colours (accent, amber from one hour, red from four) are unchanged; the tile and the card "Claude in the background" both follow. Nothing to do.
 - The animation of the activity tile uses at most two lanes on every tile size (the muncher had up to six on a tall tile), so a 2x3 tile looks calmer. Nothing to do.

@@ -110,6 +110,8 @@
     "window_both": "Beide",
     "window_five": "5 Stunden",
     "window_week": "Woche",
+    "opt_instrument": "Instrument-Look",
+    "opt_instrument_hint": "Dunkler Grund im hellen und im dunklen Look, wie ein Messgerät: Texte, Balken und Animation leuchten darauf. Aus: Die Kachel folgt dem Look des Screens.",
     "card_background": "Claude im Hintergrund"
   }
 }

@@ -114,6 +114,42 @@ static void hide(lv_obj_t *obj, bool hidden) {
   else lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
 }
 
+// The roles a tile draws with: the look's own, or (0.1.13, the tile's option "instrument") an instrument's face, whose
+// ground stays dark in the light and the dark look. On that ground every word, bar and stone takes an instrument role,
+// never INK or CARD, which follow the look. The tones (amber, red) are bright in both looks, so they stay; the accent
+// becomes the instrument's glow, the one thing it lights.
+struct Face {
+  bool instrument = false;
+
+  theme::Role role(theme::Role r) const {
+    if (!instrument) return r;
+    switch (r) {
+      case theme::INK:
+      case theme::INK_SOFT: return theme::INSTRUMENT_INK;
+      case theme::MUTED:
+      case theme::SUBTLE: return theme::INSTRUMENT_MUTED;
+      case theme::TRACK:
+      case theme::LINE: return theme::INSTRUMENT_LINE;
+      case theme::CARD: return theme::INSTRUMENT;
+      case theme::ACCENT: return theme::INSTRUMENT_GLOW;
+      default: return r;
+    }
+  }
+  // The card under the tile: the instrument's ground edge to edge, in a call of the tile. Off, the card is left alone.
+  void card() const {
+    if (instrument) ui::set_card_color(tessera::CardColor::INSTRUMENT);
+  }
+  void color(lv_obj_t *label, theme::Role r) const { ui::set_color(label, role(r)); }
+  void tone(lv_obj_t *label, Tone t, theme::Role normal) const {
+    if (instrument && t == Tone::ACCENT) ui::set_color(label, theme::INSTRUMENT_GLOW);
+    else ui::set_tone(label, t, role(normal));
+  }
+  void fill(lv_obj_t *block, Tone t, theme::Role normal) const {
+    if (instrument && t == Tone::ACCENT) ui::set_fill(block, Tone::NORMAL, theme::INSTRUMENT_GLOW);
+    else ui::set_fill(block, t, role(normal));
+  }
+};
+
 static bool inside(lv_obj_t *obj, lv_obj_t *room, const tessera::Point &p) {
   if (!obj || !room || p.x < 0) return false;
   if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) return false;
@@ -445,8 +481,10 @@ class TileMotion {
 
   // `wide`: the tile has the right half under its head for the picture, and `max_w` x `max_h` is the most that room
   // can be (the tile's own size, with nothing grounded). Narrow tiles pass 0 x 0 and keep the small picture.
-  void create(lv_obj_t *parent, MotionKind kind, const tessera::Plugin *plugin, bool wide, int max_w, int max_h) {
+  void create(lv_obj_t *parent, MotionKind kind, const tessera::Plugin *plugin, bool wide, int max_w, int max_h,
+              Face face = {}) {
     kind_ = kind;
+    face_ = face;
     if (kind_ == MotionKind::NONE) return;
     room_ = lv_obj_create(parent);
     lv_obj_remove_style_all(room_);
@@ -473,7 +511,7 @@ class TileMotion {
       for (int i = 0; i < count_; ++i) part_[i] = dot(theme::ACCENT, true);  // each spark's core, then its arms' dots
     }
     // A sleeping "z z z", and the "?" of a question.
-    mark_ = ui::label(room_, Font::BODY, theme::MUTED);
+    mark_ = ui::label(room_, Font::BODY, face_.role(theme::MUTED));
     lv_obj_set_style_text_align(mark_, LV_TEXT_ALIGN_LEFT, 0);
     hide(mark_, true);
     hide(room_, true);
@@ -562,7 +600,7 @@ class TileMotion {
   static int spot(int i, int n, int room, int size) { return n > 1 ? i * (room - size) / (n - 1) : (room - size) / 2; }
 
   lv_obj_t *dot(theme::Role role, bool round) {
-    lv_obj_t *o = ui::block(room_, role);
+    lv_obj_t *o = ui::block(room_, face_.role(role));
     lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
     if (round) lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
     return o;
@@ -576,12 +614,12 @@ class TileMotion {
   // A block's colour and how much of it shows: a tone, or white on the red ground.
   void fill(lv_obj_t *o, Tone tone, theme::Role normal, lv_opa_t opa = LV_OPA_COVER) {
     if (ground_) ui::set_fill(o, Tone::NORMAL, theme::ON_ACCENT);
-    else ui::set_fill(o, tone, normal);
+    else face_.fill(o, tone, normal);
     if (lv_obj_get_style_bg_opa(o, LV_PART_MAIN) != opa) lv_obj_set_style_bg_opa(o, opa, 0);
   }
 
   // The tile's own ground under the picture: the card, or red while a question waits.
-  void ground_fill(lv_obj_t *o) { ui::set_fill(o, ground_ ? Tone::ALERT : Tone::NORMAL, theme::CARD); }
+  void ground_fill(lv_obj_t *o) { ui::set_fill(o, ground_ ? Tone::ALERT : Tone::NORMAL, face_.role(theme::CARD)); }
 
   bool blink() const { return frame_ % 2 == 0; }
 
@@ -591,7 +629,7 @@ class TileMotion {
     ui::set_font(mark_, font);
     ui::set_text(mark_, text);
     if (ground_) ui::set_color(mark_, theme::ON_ACCENT);
-    else ui::set_tone(mark_, tone, normal);
+    else face_.tone(mark_, tone, normal);
     lv_obj_set_size(mark_, std::max(1, ui::text_width(text, font) + ui::px(2)), ui::line_height(font));
     lv_obj_set_pos(mark_, x, y);
   }
@@ -811,6 +849,7 @@ class TileMotion {
   }
 
   MotionKind kind_ = MotionKind::NONE;
+  Face face_;
   Mood mood_ = Mood::REST;
   uint32_t frame_ = 0;
   bool ground_ = false, whole_ = false;
@@ -840,8 +879,18 @@ class ActivityTile : public tessera::Tile {
     const bool large = ui::large();
     gap_ = ui::px(large ? 6 : 4);
     pad_ = ui::px(large ? 8 : 6);
+    // An instrument's face (the option, off at first): the card dark in both looks, every part in its roles.
+    face_.instrument = c.options["instrument"] | false;
+    face_.card();
+    // The whole page (0.1.13) on a grid of three by three or more: larger words, every session with its context, and
+    // the limits at the foot. A smaller page keeps the layout of a tile of its cells.
+    page_ = c.full && columns_ >= 3 && rows_ >= 3;
+    title_font_ = page_ ? Font::HEADLINE : Font::TITLE;
+    since_font_ = page_ ? Font::HEADLINE : Font::BODY_LARGE;
+    of_font_ = page_ ? Font::BODY_LARGE : Font::BODY;
+    row_font_ = page_ ? Font::BODY_LARGE : Font::BODY;
     // The ground: the whole tile red while a question waits, so it is seen from across the room.
-    ground_ = ui::block(c.parent, theme::CARD);
+    ground_ = ui::block(c.parent, face_.role(theme::CARD));
     lv_obj_set_pos(ground_, 0, 0);
     lv_obj_set_size(ground_, width_, height_);
     lv_obj_set_style_radius(ground_, ui::px(large ? 12 : 8), 0);
@@ -853,28 +902,30 @@ class ActivityTile : public tessera::Tile {
     lv_obj_remove_flag(body_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(body_, LV_OBJ_FLAG_SCROLLABLE);
     // The head: the icon, the name, and at the right the badge with the open questions.
-    icon_ = ui::label(body_, Font::ICON_SMALL, theme::MUTED);
-    title_ = ui::label(body_, Font::TITLE, theme::INK);
+    icon_ = ui::label(body_, Font::ICON_SMALL, face_.role(theme::MUTED));
+    title_ = ui::label(body_, title_font_, face_.role(theme::INK));
     badge_h_ = ui::line_height(Font::BODY) + ui::px(large ? 6 : 4);
     badge_ = ui::block(body_, theme::ACCENT);
     lv_obj_set_style_radius(badge_, LV_RADIUS_CIRCLE, 0);
     badge_text_ = ui::label(badge_, Font::BODY, theme::ON_ACCENT);
     lv_obj_set_style_text_align(badge_text_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(badge_text_);
-    head_ = std::max({ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL), badge_h_});
-    big_ = ui::label(body_, Font::VALUE, theme::INK);
-    since_ = ui::label(body_, Font::BODY_LARGE, theme::INK);
-    of_ = ui::label(body_, Font::BODY, theme::MUTED);
+    head_ = std::max({ui::line_height(title_font_), ui::line_height(Font::ICON_SMALL), badge_h_});
+    big_ = ui::label(body_, Font::VALUE, face_.role(theme::INK));
+    since_ = ui::label(body_, since_font_, face_.role(theme::INK));
+    of_ = ui::label(body_, of_font_, face_.role(theme::MUTED));
     for (int i = 0; i < MAX_TILE_ROWS; ++i) {
-      row_name_[i] = ui::label(body_, Font::BODY, theme::INK_SOFT);
-      row_state_[i] = ui::label(body_, Font::BODY, theme::MUTED);
+      row_name_[i] = ui::label(body_, row_font_, face_.role(theme::INK_SOFT));
+      row_state_[i] = ui::label(body_, row_font_, face_.role(theme::MUTED));
       lv_obj_set_style_text_align(row_state_[i], LV_TEXT_ALIGN_RIGHT, 0);
     }
+    // The whole page has a last line for the account's limits.
+    if (page_) limits_ = ui::label(body_, Font::BODY, face_.role(theme::MUTED));
     // The motion the person picked (the manifest fills in the default); its parts only.
     // A wide tile gives it the right half under the head, down to its foot: it makes the parts of the tallest such room.
     const bool wide = columns_ >= 2;
     motion_.create(body_, motion_kind(c.options["motion"] | "mosaic"), plugin_, wide, wide ? width_ / 2 - gap_ : 0,
-                   wide ? height_ - head_ - gap_ / 2 : 0);
+                   wide ? height_ - head_ - gap_ / 2 : 0, face_);
   }
 
   void on_state(JsonObjectConst data) override {
@@ -892,8 +943,8 @@ class ActivityTile : public tessera::Tile {
   }
 
   void on_theme() override {
-    ui::set_color(title_, theme::INK);
-    for (int i = 0; i < MAX_TILE_ROWS; ++i) ui::set_color(row_name_[i], theme::INK_SOFT);
+    face_.color(title_, theme::INK);
+    for (int i = 0; i < MAX_TILE_ROWS; ++i) face_.color(row_name_[i], theme::INK_SOFT);
     paint(tessera::epoch());
   }
 
@@ -914,6 +965,7 @@ class ActivityTile : public tessera::Tile {
  private:
   void paint(uint32_t epoch) {
     const Overview &o = plugin_->overview();
+    face_.card();
     ui::set_text(title_, roomy::plain(name_));
     const bool ready = has_entity_ && o.valid;
     bool waits = false;
@@ -928,7 +980,7 @@ class ActivityTile : public tessera::Tile {
     lv_obj_set_style_bg_opa(ground_, grounded_ ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     // On the ground the parts keep off its edge: a little at the sides, at the top and foot only what the tile
     // spares beyond its head and two lines.
-    const int spare = height_ - head_ - ui::line_height(Font::BODY_LARGE) - ui::line_height(Font::BODY) - gap_;
+    const int spare = height_ - head_ - ui::line_height(since_font_) - ui::line_height(of_font_) - gap_;
     const int in_x = grounded_ ? pad_ / 2 : 0, in_y = grounded_ ? std::max(0, std::min(pad_ / 2, spare / 2)) : 0;
     bw_ = std::max(1, width_ - 2 * in_x);
     bh_ = std::max(1, height_ - 2 * in_y);
@@ -952,21 +1004,22 @@ class ActivityTile : public tessera::Tile {
     }
     const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
     lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
-    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
+    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(title_font_)) / 2);
     lv_obj_set_width(title_, std::max(1, bw_ - icon_w - (asks ? badge_h_ * 2 : 0)));
 
     for (int i = 0; i < MAX_TILE_ROWS; ++i) {
       hide(row_name_[i], true);
       hide(row_state_[i], true);
     }
-    const int body_h = ui::line_height(Font::BODY);
+    hide(limits_, true);
+    const int body_h = ui::line_height(Font::BODY), of_h = ui::line_height(of_font_);
     if (!ready) {
       // Nothing to show yet: say what to do.
       hide(big_, true);
       hide(since_, true);
       hide(of_, false);
       lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
-      lv_obj_set_size(of_, bw_, body_h);
+      lv_obj_set_size(of_, bw_, of_h);
       lv_obj_set_pos(of_, 0, head_ + gap_);
       ink(of_, Tone::NORMAL, theme::MUTED);
       ui::set_text(of_, plugin_->text(wait_ == "wrong_entity" || !has_entity_ ? "choose_sensor" : "loading"));
@@ -996,7 +1049,11 @@ class ActivityTile : public tessera::Tile {
     // row, the active sessions' names the rest.
     const std::string big = std::to_string(o.active);
     const bool wide = columns_ >= 2;
-    const int top_room = rows_ >= 2 ? std::max(2 * body_h, bh_ / rows_ - head_) : bh_ - head_;
+    // On the whole page the number takes what the largest digits need, the sessions the rest.
+    const int page_room = std::min((bh_ - head_) / 2, ui::line_height(Font::DIGITS) + 2 * gap_);
+    const int top_room = page_        ? std::max(2 * body_h, page_room)
+                         : rows_ >= 2 ? std::max(2 * body_h, bh_ / rows_ - head_)
+                                      : bh_ - head_;
     // The motion: the right half of a wide tile, under the head down to the bottom (the number, the words and the
     // names keep the left half); above the number on a narrow one.
     int anim_w = 0, anim_h = 0;
@@ -1026,10 +1083,19 @@ class ActivityTile : public tessera::Tile {
     int bottom;
     if (wide) {
       // Beside the number: the time on the first line, "of N sessions" under it.
-      const int body_large_h = ui::line_height(Font::BODY_LARGE);
       const int text_x = std::min(area - 1, ui::text_width(big, face) + ui::px(12));
       const int text_w = std::max(1, area - text_x);
-      const int words_h = body_large_h + body_h;
+      // On the whole page the time is written large, and steps down where its words are long.
+      Font since_face = since_font_;
+      if (page_) {
+        for (Font f : {Font::HEADLINE, Font::TITLE, Font::BODY_LARGE}) {
+          since_face = f;
+          if (ui::text_width(since, f) <= text_w) break;
+        }
+        ui::set_font(since_, since_face);
+      }
+      const int body_large_h = ui::line_height(since_face);
+      const int words_h = body_large_h + of_h;
       const int block_h = std::max(big_h, words_h);
       const int top = head_ + std::max(0, (top_room - block_h) / 2);
       lv_obj_set_size(big_, text_x, big_h);
@@ -1041,7 +1107,7 @@ class ActivityTile : public tessera::Tile {
       ui::set_text(since_, since);
       ink(since_, word_tone, busy ? theme::INK : theme::MUTED);
       lv_obj_set_style_text_align(of_, LV_TEXT_ALIGN_LEFT, 0);
-      lv_obj_set_size(of_, text_w, body_h);
+      lv_obj_set_size(of_, text_w, of_h);
       lv_obj_set_pos(of_, text_x, top + (block_h - words_h) / 2 + body_large_h);
       ui::set_text(of_, of);
       ink(of_, Tone::NORMAL, theme::MUTED);
@@ -1068,29 +1134,44 @@ class ActivityTile : public tessera::Tile {
     }
     motion_.paint(asks ? Mood::ASK : waits ? Mood::WAIT : busy ? Mood::WORK : Mood::REST, frame_, grounded_);
 
-    // Two rows high or more: the names of the active sessions.
+    // Two rows high or more: the names of the active sessions. On the whole page every session, each with its context
+    // fill, and the account's limits on the last line.
     if (rows_ < 2) return;
-    const int step = body_h + gap_ / 2;
+    const int row_h = ui::line_height(row_font_);
+    int foot = bh_;
+    if (page_) {
+      const std::string limits = limits_line(plugin_, o, epoch);
+      hide(limits_, limits.empty());
+      if (!limits.empty()) {
+        foot = bh_ - body_h - gap_;
+        lv_obj_set_size(limits_, area, body_h);
+        lv_obj_set_pos(limits_, 0, bh_ - body_h);
+        ui::set_text(limits_, limits);
+        ink(limits_, Tone::NORMAL, theme::MUTED);
+      }
+    }
+    const int step = row_h + (page_ ? gap_ : gap_ / 2);
     int y = bottom, shown = 0;
     for (const SessionRow &row : o.rows) {
-      if (shown >= MAX_TILE_ROWS || y + body_h > bh_) break;
-      if (!is_active(row.state)) continue;
-      const std::string state = state_word(plugin_, row.state);
-      const int state_w = std::min(area / 2, ui::text_width(state, Font::BODY) + ui::px(4));
+      if (shown >= MAX_TILE_ROWS || y + row_h > foot) break;
+      if (!page_ && !is_active(row.state)) continue;
+      std::string state = state_word(plugin_, row.state);
+      if (page_ && row.ctx >= 0) state = ctx_word(plugin_, row.ctx) + " · " + state;
+      const int state_w = std::min(page_ ? area * 3 / 5 : area / 2, ui::text_width(state, row_font_) + ui::px(4));
       lv_obj_t *name = row_name_[shown], *word = row_state_[shown];
       hide(name, false);
       hide(word, false);
-      lv_obj_set_size(word, state_w, body_h);
+      lv_obj_set_size(word, state_w, row_h);
       lv_obj_set_pos(word, area - state_w, y);
       ui::set_text(word, state);
       const Tone row_tone = !std::strcmp(row.state, "ask")    ? Tone::ALERT
                             : !std::strcmp(row.state, "perm") ? Tone::BUSY
                                                               : Tone::NORMAL;
       ink(word, row_tone, theme::MUTED);
-      lv_obj_set_size(name, std::max(1, area - state_w - ui::px(6)), body_h);
+      lv_obj_set_size(name, std::max(1, area - state_w - ui::px(6)), row_h);
       lv_obj_set_pos(name, 0, y);
       ui::set_text(name, row.name);
-      ink(name, Tone::NORMAL, theme::INK_SOFT);
+      ink(name, Tone::NORMAL, page_ && !is_active(row.state) ? theme::MUTED : theme::INK_SOFT);
       y += step;
       shown += 1;
     }
@@ -1099,17 +1180,19 @@ class ActivityTile : public tessera::Tile {
   // A label's colour: its tone, or white on the red ground.
   void ink(lv_obj_t *label, Tone tone, theme::Role normal) {
     if (grounded_) ui::set_color(label, theme::ON_ACCENT);
-    else ui::set_tone(label, tone, normal);
+    else face_.tone(label, tone, normal);
   }
 
   ClaudeSessions *plugin_;
   tessera::Text entity_, name_, wait_;
   int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0;
   int pad_ = 0, bw_ = 1, bh_ = 1;
-  bool has_entity_ = false, grounded_ = false;
+  bool has_entity_ = false, grounded_ = false, page_ = false;
+  Face face_;
+  Font title_font_ = Font::TITLE, since_font_ = Font::BODY_LARGE, of_font_ = Font::BODY, row_font_ = Font::BODY;
   uint32_t frame_ = 0;
   TileMotion motion_;
-  lv_obj_t *ground_{}, *body_{}, *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{};
+  lv_obj_t *ground_{}, *body_{}, *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *since_{}, *of_{}, *limits_{};
   lv_obj_t *row_name_[MAX_TILE_ROWS]{}, *row_state_[MAX_TILE_ROWS]{};
 };
 
@@ -1464,16 +1547,17 @@ static int progress_share_pm(const BackgroundRow &row, uint32_t epoch) {
 }
 
 // A bar of two blocks made in create()/open(): the track, the fill inside it as long as `pm` of it, in the tone.
-static void paint_bar(lv_obj_t *track, lv_obj_t *fill, int x, int y, int w, int h, int pm, Tone tone) {
+static void paint_bar(lv_obj_t *track, lv_obj_t *fill, int x, int y, int w, int h, int pm, Tone tone,
+                      const Face &face = Face()) {
   w = std::max(1, w);
   hide(track, false);
   lv_obj_set_pos(track, x, y);
   lv_obj_set_size(track, w, h);
-  ui::set_fill(track, Tone::NORMAL, theme::TRACK);
+  face.fill(track, Tone::NORMAL, theme::TRACK);
   hide(fill, false);
   lv_obj_set_pos(fill, 0, 0);
   lv_obj_set_size(fill, std::min(w, std::max(h, w * pm / 1000)), h);
-  ui::set_fill(fill, tone, theme::ACCENT);
+  face.fill(fill, tone, theme::ACCENT);
 }
 
 static lv_obj_t *bar_block(lv_obj_t *parent, theme::Role role) {
@@ -1561,27 +1645,38 @@ class BackgroundTile : public tessera::Tile {
     const bool large = ui::large();
     gap_ = ui::px(large ? 6 : 4);
     bar_h_ = std::max(3, ui::px(large ? 6 : 4));
+    // An instrument's face (the option, off at first): the card dark in both looks, every part in its roles.
+    face_.instrument = c.options["instrument"] | false;
+    face_.card();
+    // The whole page (0.1.13) on a grid of three by three or more: larger words, a second line per task (its session
+    // and its steps) and a thicker bar. A smaller page keeps the list of a tile of its cells.
+    page_ = c.full && columns_ >= 3 && rows_ >= 3;
+    title_font_ = page_ ? Font::HEADLINE : Font::TITLE;
+    row_font_ = page_ ? Font::BODY_LARGE : Font::BODY;
+    if (page_) bar_h_ = bar_h_ * 3 / 2;
     // The head: the icon, the name, and at the right the badge with the number of tasks.
-    icon_ = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
-    title_ = ui::label(c.parent, Font::TITLE, theme::INK);
+    icon_ = ui::label(c.parent, Font::ICON_SMALL, face_.role(theme::MUTED));
+    title_ = ui::label(c.parent, title_font_, face_.role(theme::INK));
     badge_h_ = ui::line_height(Font::BODY) + ui::px(large ? 6 : 4);
     badge_ = ui::block(c.parent, theme::ACCENT);
     lv_obj_set_style_radius(badge_, LV_RADIUS_CIRCLE, 0);
     badge_text_ = ui::label(badge_, Font::BODY, theme::ON_ACCENT);
     lv_obj_set_style_text_align(badge_text_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(badge_text_);
-    head_ = std::max({ui::line_height(Font::TITLE), ui::line_height(Font::ICON_SMALL), badge_h_});
-    big_ = ui::label(c.parent, Font::VALUE, theme::INK);
+    head_ = std::max({ui::line_height(title_font_), ui::line_height(Font::ICON_SMALL), badge_h_});
+    big_ = ui::label(c.parent, Font::VALUE, face_.role(theme::INK));
     lv_obj_set_style_text_align(big_, LV_TEXT_ALIGN_CENTER, 0);
-    note_ = ui::label(c.parent, Font::BODY, theme::MUTED);
+    note_ = ui::label(c.parent, Font::BODY, face_.role(theme::MUTED));
     for (int i = 0; i < MAX_TASK_ROWS; ++i) {
-      row_icon_[i] = ui::label(c.parent, Font::ICON_SMALL, theme::MUTED);
-      row_title_[i] = ui::label(c.parent, Font::BODY, theme::INK_SOFT);
-      row_when_[i] = ui::label(c.parent, Font::BODY, theme::MUTED);
+      row_icon_[i] = ui::label(c.parent, Font::ICON_SMALL, face_.role(theme::MUTED));
+      row_title_[i] = ui::label(c.parent, row_font_, face_.role(theme::INK_SOFT));
+      row_when_[i] = ui::label(c.parent, Font::BODY, face_.role(theme::MUTED));
       lv_obj_set_style_text_align(row_when_[i], LV_TEXT_ALIGN_RIGHT, 0);
-      // Under each task: what is left of it.
-      row_track_[i] = bar_block(c.parent, theme::TRACK);
-      row_fill_[i] = bar_block(row_track_[i], theme::ACCENT);
+      // The whole page: under the title, the task's session and its steps.
+      if (page_) row_sub_[i] = ui::label(c.parent, Font::BODY, face_.role(theme::MUTED));
+      // Under each task: how far it is.
+      row_track_[i] = bar_block(c.parent, face_.role(theme::TRACK));
+      row_fill_[i] = bar_block(row_track_[i], face_.role(theme::ACCENT));
     }
   }
 
@@ -1613,13 +1708,14 @@ class BackgroundTile : public tessera::Tile {
     painted_minute_ = epoch / 60;
     const bool ready = has_entity_ && valid_;
     const bool busy = ready && count_ > 0 && !tasks_.empty();
+    face_.card();
     ui::set_text(title_, roomy::plain(name_));
-    ui::set_color(title_, theme::INK);
+    face_.color(title_, theme::INK);
     ui::set_text(icon_, ui::icon(ICON_TASKS));
-    ui::set_tone(icon_, busy ? Tone::ACCENT : Tone::NORMAL, theme::MUTED);
+    face_.tone(icon_, busy ? Tone::ACCENT : Tone::NORMAL, theme::MUTED);
     const int icon_w = ui::line_height(Font::ICON_SMALL) + ui::px(4);
     lv_obj_set_pos(icon_, 0, (head_ - ui::line_height(Font::ICON_SMALL)) / 2);
-    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(Font::TITLE)) / 2);
+    lv_obj_set_pos(title_, icon_w, (head_ - ui::line_height(title_font_)) / 2);
 
     // The badge: how many run, while a list of them is shown under the head.
     const bool listed = busy && (rows_ >= 2 || columns_ >= 2);
@@ -1639,6 +1735,7 @@ class BackgroundTile : public tessera::Tile {
       hide(row_icon_[i], true);
       hide(row_title_[i], true);
       hide(row_when_[i], true);
+      hide(row_sub_[i], true);
       hide(row_track_[i], true);
     }
     const int body_h = ui::line_height(Font::BODY);
@@ -1649,7 +1746,7 @@ class BackgroundTile : public tessera::Tile {
       lv_obj_set_style_text_align(note_, LV_TEXT_ALIGN_LEFT, 0);
       lv_obj_set_size(note_, width_, body_h);
       lv_obj_set_pos(note_, 0, head_ + gap_);
-      ui::set_color(note_, theme::MUTED);
+      face_.color(note_, theme::MUTED);
       const char *key = !has_entity_ || wait_ == "wrong_entity" ? "choose_background_sensor"
                         : !ready                                 ? "loading"
                                                                  : "background_none";
@@ -1672,7 +1769,7 @@ class BackgroundTile : public tessera::Tile {
       hide(big_, false);
       ui::set_font(big_, face);
       ui::set_text(big_, big);
-      ui::set_tone(big_, Tone::ACCENT, theme::INK);
+      face_.tone(big_, Tone::ACCENT, theme::INK);
       lv_obj_set_size(big_, width_, big_h);
       lv_obj_set_pos(big_, 0, top);
       // The newest come first: the oldest is the last.
@@ -1681,7 +1778,7 @@ class BackgroundTile : public tessera::Tile {
       lv_obj_set_style_text_align(note_, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_size(note_, width_, body_h);
       lv_obj_set_pos(note_, 0, top + big_h);
-      ui::set_color(note_, theme::MUTED);
+      face_.color(note_, theme::MUTED);
       ui::set_text(note_, oldest.hm[0] ? tessera::fill(plugin_->text("background_since"), "n", oldest.hm)
                                        : std::string(plugin_->text("background_runs")));
       return;
@@ -1692,10 +1789,12 @@ class BackgroundTile : public tessera::Tile {
     hide(big_, true);
     hide(note_, true);
     const int icon_h = ui::line_height(Font::ICON_SMALL);
-    const int line_h = std::max(body_h, icon_h);
+    const int title_h = ui::line_height(row_font_);
+    const int line_h = std::max(title_h, icon_h);
     const int bar_gap = std::max(1, gap_ / 2);
-    const int row_h = line_h + bar_gap + bar_h_;
-    const int step = row_h + std::max(1, gap_ / 2);
+    const int sub_h = page_ ? body_h + bar_gap : 0;  // the whole page's second line
+    const int row_h = line_h + sub_h + bar_gap + bar_h_;
+    const int step = row_h + (page_ ? gap_ * 2 : std::max(1, gap_ / 2));
     const bool roomy_row = columns_ >= 2;
     const int total = static_cast<int>(tasks_.size());
     int y = head_ + gap_, shown = 0;
@@ -1706,14 +1805,15 @@ class BackgroundTile : public tessera::Tile {
       if (more > 1 && shown > 0 && (y + step + row_h > height_ || shown == MAX_TASK_ROWS - 1)) {
         lv_obj_t *title = row_title_[shown];
         hide(title, false);
-        lv_obj_set_size(title, width_, body_h);
-        lv_obj_set_pos(title, 0, y + (line_h - body_h) / 2);
-        ui::set_color(title, theme::MUTED);
+        lv_obj_set_size(title, width_, title_h);
+        lv_obj_set_pos(title, 0, y + (line_h - title_h) / 2);
+        face_.color(title, theme::MUTED);
         ui::set_text(title, tessera::format(plugin_->text("background_more"), more));
         break;
       }
       // At the right: "14:05 · 2/5" with steps, else "14:05 · 12 min"; one column wide only "2/5" or "14:05".
-      const std::string done = progress_word(plugin_, row);
+      // On the whole page the steps stand in words on the second line, so the right keeps the time.
+      const std::string done = page_ ? std::string() : progress_word(plugin_, row);
       std::string when = roomy_row || done.empty() ? row.hm : "";
       if (!done.empty()) {
         if (!when.empty()) when += " · ";
@@ -1728,18 +1828,37 @@ class BackgroundTile : public tessera::Tile {
       hide(title, false);
       hide(at, false);
       ui::set_text(icon, ui::icon(kind_icon(row.kind)));
-      ui::set_color(icon, theme::MUTED);
+      face_.color(icon, theme::MUTED);
       lv_obj_set_pos(icon, 0, y + (line_h - icon_h) / 2);
       lv_obj_set_size(at, when_w, body_h);
       lv_obj_set_pos(at, width_ - when_w, y + (line_h - body_h) / 2);
       ui::set_text(at, when);
-      ui::set_color(at, theme::MUTED);
-      lv_obj_set_size(title, std::max(1, width_ - icon_w - when_w - ui::px(6)), body_h);
-      lv_obj_set_pos(title, icon_w, y + (line_h - body_h) / 2);
+      face_.color(at, theme::MUTED);
+      lv_obj_set_size(title, std::max(1, width_ - icon_w - when_w - ui::px(6)), title_h);
+      lv_obj_set_pos(title, icon_w, y + (line_h - title_h) / 2);
       ui::set_text(title, row.title);
-      ui::set_color(title, theme::INK_SOFT);
-      paint_bar(row_track_[shown], row_fill_[shown], icon_w, y + line_h + bar_gap, width_ - icon_w, bar_h_,
-                progress_share_pm(row, epoch), age_tone(row, epoch));
+      face_.color(title, page_ ? theme::INK : theme::INK_SOFT);
+      if (page_) {
+        // "tessera-bridge · Step 2 of 3", or an agent's actions so far, or the session alone.
+        std::string sub = row.sess;
+        std::string how;
+        if (has_progress(row)) {
+          how = tessera::fill(tessera::fill(plugin_->text("background_step"), "a", std::to_string(row.done)).c_str(),
+                              "b", std::to_string(row.total));
+        } else if (row.calls >= 0) {
+          how = tessera::format(plugin_->text("background_calls"), row.calls);
+        }
+        if (!sub.empty() && !how.empty()) sub += " · ";
+        sub += how;
+        lv_obj_t *under = row_sub_[shown];
+        hide(under, sub.empty());
+        lv_obj_set_size(under, std::max(1, width_ - icon_w), body_h);
+        lv_obj_set_pos(under, icon_w, y + line_h + bar_gap);
+        ui::set_text(under, sub);
+        face_.color(under, theme::MUTED);
+      }
+      paint_bar(row_track_[shown], row_fill_[shown], icon_w, y + line_h + sub_h + bar_gap, width_ - icon_w, bar_h_,
+                progress_share_pm(row, epoch), age_tone(row, epoch), face_);
       y += step;
       shown += 1;
     }
@@ -1750,11 +1869,13 @@ class BackgroundTile : public tessera::Tile {
   tessera::List<BackgroundRow> tasks_;
   int width_ = 0, height_ = 0, columns_ = 1, rows_ = 1, tile_ = -1, head_ = 0, gap_ = 0, badge_h_ = 0, count_ = 0;
   int bar_h_ = 4;
-  bool has_entity_ = false, valid_ = false;
+  bool has_entity_ = false, valid_ = false, page_ = false;
+  Face face_;
+  Font title_font_ = Font::TITLE, row_font_ = Font::BODY;
   uint32_t painted_minute_ = 0;
   lv_obj_t *icon_{}, *title_{}, *badge_{}, *badge_text_{}, *big_{}, *note_{};
   lv_obj_t *row_icon_[MAX_TASK_ROWS]{}, *row_title_[MAX_TASK_ROWS]{}, *row_when_[MAX_TASK_ROWS]{};
-  lv_obj_t *row_track_[MAX_TASK_ROWS]{}, *row_fill_[MAX_TASK_ROWS]{};
+  lv_obj_t *row_track_[MAX_TASK_ROWS]{}, *row_fill_[MAX_TASK_ROWS]{}, *row_sub_[MAX_TASK_ROWS]{};
 };
 
 // ---- The sessions card: every session, a page at a time; a tap on one with a question opens it ----
